@@ -112,3 +112,25 @@ type VpnInfo struct {
 	ID           int    `json:"id"`
 	Timeout      int    `json:"timeout"`
 }
+
+// WgSetting 是隧道附加配置。
+type WgSetting struct {
+	VpnMTU        uint32   `json:"vpn_mtu"`
+	VpnDNS        string   `json:"vpn_dns"`
+	VpnDNSBackup  string   `json:"vpn_dns_backup"`
+	VpnDNSDomain  []string `json:"vpn_dns_domain_split"`
+	VpnRouteFull  []string `json:"vpn_route_full"`
+	VpnRouteSplit []string `json:"vpn_route_split"`
+	V6RouteFull   []string `json:"v6_route_full"`
+	V6RouteSplit  []string `json:"v6_route_split"`
+}
+
+// WgInfo 是 /vpn/conn 返回的隧道参数。
+type WgInfo struct {
+	IP        string    `json:"ip"`
+	IPv6      string    `json:"ipv6"`
+	IPMask    string    `json:"ip_mask"`
+	PublicKey string    `json:"public_key"`
+	Setting   WgSetting `json:"setting"`
+	Mode      uint32    `json:"mode"`
+}

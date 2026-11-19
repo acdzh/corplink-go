@@ -46,6 +46,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "list 失败:", err)
 			os.Exit(1)
 		}
+	case "connect":
+		if err := runConnect(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "connect 失败:", err)
+			os.Exit(1)
+		}
 	case "version", "-v", "--version":
 		fmt.Println("corplink-go", version)
 	case "help", "-h", "--help":
@@ -62,6 +67,7 @@ func usage() {
   corplink-go probe  [-config ./config.json] [-v]
   corplink-go login  [-config ./config.json] [-alias lark] [-callback <URL>] [-v]
   corplink-go list   [-config ./config.json] [-v]
+  corplink-go connect [-config ./config.json] [-v]
   corplink-go version
 `)
 }
