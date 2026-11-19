@@ -1,7 +1,8 @@
-// Package tunnel 用用户态 WireGuard 起隧道，并在 netstack 上暴露 SOCKS5。
+// Package tunnel 用用户态 WireGuard 建隧道，并在 netstack 上提供拨号能力。
 //
-// 数据面直接复用 PinkD/wireguard-go（与 corplink-rs 内嵌的是同一个 Go 实现），
-// 它包含飞连特有的 Noise 标识与 TCP 传输；控制面（登录/签名/配置拉取）由本项目实现。
+// 数据面复用 PinkD/wireguard-go（与 corplink-rs 内嵌的同一份 Go 实现），
+// 它包含飞连特有的 Noise 标识与 TCP 传输；控制面由本项目实现。
+// 代理（SOCKS5/HTTP）在上层 internal/proxy 里，直接调用这里的拨号能力。
 package tunnel
 
 import (
@@ -13,7 +14,6 @@ import (
 	"net/netip"
 	"strings"
 
-	socks5 "github.com/things-go/go-socks5"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
@@ -45,25 +45,18 @@ type Config struct {
 	MTU int
 	// Protocol 是传输协议。
 	Protocol int
-	// SocksListen 是 SOCKS5 监听地址。
-	SocksListen string
-	// SocksUser 与 SocksPass 非空时启用 RFC1929 认证。
-	SocksUser string
-	SocksPass string
-	// Verbose 打开 WireGuard 内部日志，便于排查握手问题。
+	// Verbose 打开 WireGuard 内部日志。
 	Verbose bool
 }
 
-// Tunnel 是一条已启动的隧道及其 SOCKS5 服务。
+// Tunnel 是一条已启动的隧道。
 type Tunnel struct {
 	dev    *device.Device
 	net    *netstack.Net
-	socks  *socks5.Server
-	listen net.Listener
 	routes []netip.Prefix
 }
 
-// Start 创建 netstack、启动 WireGuard 设备并对外提供 SOCKS5。
+// Start 创建 netstack 并启动 WireGuard 设备。
 func Start(cfg Config) (*Tunnel, error) {
 	addrs, err := parseAddrs(cfg.Addresses)
 	if err != nil {
@@ -92,8 +85,7 @@ func Start(cfg Config) (*Tunnel, error) {
 	if cfg.Verbose {
 		level = device.LogLevelVerbose
 	}
-	logger := device.NewLogger(level, "corplink-go ")
-	dev := device.NewDevice(tunDev, bind, logger)
+	dev := device.NewDevice(tunDev, bind, device.NewLogger(level, "corplink-go "))
 	if err := dev.Up(); err != nil {
 		return nil, fmt.Errorf("启动 WireGuard 设备: %w", err)
 	}
@@ -104,28 +96,15 @@ func Start(cfg Config) (*Tunnel, error) {
 	if err := dev.IpcSet(uapi); err != nil {
 		return nil, fmt.Errorf("下发 WireGuard 配置: %w", err)
 	}
+	return &Tunnel{dev: dev, net: stack, routes: parsePrefixes(cfg.AllowedIPs)}, nil
+}
 
-	opts := []socks5.Option{
-		socks5.WithResolver(netstackResolver{net: stack}),
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return stack.DialContext(ctx, network, addr)
-		}),
+// Close 停止隧道。
+func (t *Tunnel) Close() {
+	if t == nil || t.dev == nil {
+		return
 	}
-	if cfg.SocksUser != "" {
-		opts = append(opts, socks5.WithCredential(socks5.StaticCredentials{cfg.SocksUser: cfg.SocksPass}))
-	}
-	server := socks5.NewServer(opts...)
-	ln, err := net.Listen("tcp", cfg.SocksListen)
-	if err != nil {
-		return nil, fmt.Errorf("监听 SOCKS5 %s: %w", cfg.SocksListen, err)
-	}
-	t := &Tunnel{dev: dev, net: stack, socks: server, listen: ln, routes: parsePrefixes(cfg.AllowedIPs)}
-	go func() {
-		if err := server.Serve(ln); err != nil {
-			fmt.Printf("SOCKS5 服务退出: %v\n", err)
-		}
-	}()
-	return t, nil
+	t.dev.Close()
 }
 
 // Routes 返回隧道分流网段。
@@ -147,75 +126,23 @@ func (t *Tunnel) Allowed(addr netip.Addr) bool {
 	return false
 }
 
-// SocksAddr 返回 SOCKS5 实际监听地址（监听 0 端口时可拿到动态端口）。
-func (t *Tunnel) SocksAddr() string {
-	if t.listen == nil {
-		return ""
-	}
-	return t.listen.Addr().String()
-}
-
-// DialContext 直接在隧道内发起连接，用于排查 SOCKS5 与 netstack 之间的问题。
+// DialContext 通过隧道拨号。
 func (t *Tunnel) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return t.net.DialContext(ctx, network, addr)
 }
 
-// LookupHost 在隧道内解析域名，用于排查 DNS 是否可用。
+// LookupHost 用隧道内 DNS 解析域名。
 func (t *Tunnel) LookupHost(host string) ([]string, error) {
 	return t.net.LookupHost(host)
 }
 
-// Stats 返回 WireGuard UAPI 的设备状态，用于排查握手与流量。
+// Stats 返回 WireGuard UAPI 设备状态，用于排查握手与流量。
 func (t *Tunnel) Stats() (string, error) {
 	var buf strings.Builder
 	if err := t.dev.IpcGetOperation(&buf); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-// Close 停止 SOCKS5 与 WireGuard。
-func (t *Tunnel) Close() {
-	if t.listen != nil {
-		_ = t.listen.Close()
-	}
-	if t.dev != nil {
-		t.dev.Close()
-	}
-}
-
-// netstackResolver 在隧道内解析域名，避免泄漏到本机 DNS。
-type netstackResolver struct {
-	net *netstack.Net
-}
-
-// Resolve 实现 socks5.NameResolver。
-func (r netstackResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	if ip := net.ParseIP(name); ip != nil {
-		return ctx, ip, nil
-	}
-	addrs, err := r.net.LookupHost(name)
-	if err != nil {
-		return ctx, nil, err
-	}
-	// 优先 IPv4：部分服务端对隧道内 IPv6 支持不完整，先走 v4 成功率更高。
-	var v6 net.IP
-	for _, a := range addrs {
-		ip := net.ParseIP(a)
-		if ip == nil {
-			continue
-		}
-		if ip.To4() != nil {
-			return ctx, ip, nil
-		}
-		if v6 == nil {
-			v6 = ip
-		}
-	}
-	if v6 != nil {
-		return ctx, v6, nil
-	}
-	return ctx, nil, fmt.Errorf("解析 %s 失败：无地址", name)
 }
 
 // buildUAPI 生成 WireGuard UAPI 配置串。

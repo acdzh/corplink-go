@@ -328,15 +328,14 @@ func (a *Agent) build(ctx context.Context, node api.VpnInfo) (*active, error) {
 		protocol = tunnel.ProtocolTCP
 	}
 	tun, err := tunnel.Start(tunnel.Config{
-		PrivateKey:  pair.PrivateKey,
-		PeerKey:     info.PublicKey,
-		Endpoint:    fmt.Sprintf("%s:%d", node.IP, node.VPNPort),
-		Addresses:   addresses,
-		DNS:         dns,
-		AllowedIPs:  info.Setting.VpnRouteSplit,
-		MTU:         int(info.Setting.VpnMTU),
-		Protocol:    protocol,
-		SocksListen: "127.0.0.1:0",
+		PrivateKey: pair.PrivateKey,
+		PeerKey:    info.PublicKey,
+		Endpoint:   fmt.Sprintf("%s:%d", node.IP, node.VPNPort),
+		Addresses:  addresses,
+		DNS:        dns,
+		AllowedIPs: info.Setting.VpnRouteSplit,
+		MTU:        int(info.Setting.VpnMTU),
+		Protocol:   protocol,
 	})
 	if err != nil {
 		return nil, err

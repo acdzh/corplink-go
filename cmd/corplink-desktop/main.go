@@ -1,11 +1,15 @@
-// Command corplink-desktop 是桌面壳：在进程内启动同一个运行时，
-// 用 MyGo 的原生控件展示状态与操作入口，浏览器面板依然可用。
+// Command corplink-desktop 是桌面壳：进程内启动同一运行时，
+// 用 MyGo 原生控件操作，并常驻菜单栏托盘；浏览器面板依然可用。
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"log"
 	"os"
 	"os/signal"
@@ -41,6 +45,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("启动运行时: %v", err)
 	}
+	panelURL := "http://" + rt.PanelAddr
 
 	// 收到中断信号时优雅退出。
 	stop := make(chan os.Signal, 1)
@@ -52,6 +57,19 @@ func main() {
 		mygo.App.Quit()
 	}()
 
+	openPanel := func() {
+		if err := mygo.Shell.OpenExternal(panelURL); err != nil {
+			fmt.Println("打开面板失败:", err)
+		}
+	}
+	connect := func() {
+		go func() {
+			if err := rt.Agent.Connect(context.Background(), ""); err != nil {
+				fmt.Println("连接失败:", err)
+			}
+		}()
+	}
+
 	view := func(c *ui.Context) {
 		state := rt.Agent.State()
 		ui.Column(c).Fill().Padding(18).Gap(12).Children(func() {
@@ -60,20 +78,20 @@ func main() {
 				title = fmt.Sprintf("已连接 %s · %s", state.Node, state.Address)
 			}
 			ui.Text(c, title).FontSize(16).Bold()
-			ui.Text(c, fmt.Sprintf("代理 %s · 面板 http://%s", rt.ProxyAddr, rt.PanelAddr)).FontSize(12)
+			ui.Text(c, fmt.Sprintf("代理 %s", rt.ProxyAddr)).FontSize(12)
+			ui.Text(c, fmt.Sprintf("面板 %s", panelURL)).FontSize(12)
 			if !rt.Agent.LoggedIn() {
-				ui.Text(c, "未登录，请在浏览器面板完成登录").FontSize(12)
+				ui.Text(c, "未登录，请在面板完成登录").FontSize(12)
 			}
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.PrimaryButton(c, "连接").Clicked() {
-					go func() {
-						if err := rt.Agent.Connect(context.Background(), ""); err != nil {
-							fmt.Println("连接失败:", err)
-						}
-					}()
+					connect()
 				}
 				if ui.Button(c, "断开").Clicked() {
 					rt.Agent.Disconnect()
+				}
+				if ui.Button(c, "打开面板").Clicked() {
+					openPanel()
 				}
 			})
 			ui.Text(c, fmt.Sprintf("可用节点 %d 个", len(rt.Agent.Nodes()))).FontSize(12)
@@ -85,8 +103,43 @@ func main() {
 			Title:   "CorpLink Go",
 			Content: ui.View(view),
 		})
+		// 菜单栏常驻图标：不用切换窗口就能连接/断开。
+		if icon, err := trayIcon(); err == nil {
+			if tray, err := mygo.NewTray(mygo.TrayOptions{
+				ID:   "corplink-go",
+				Icon: icon,
+				Menu: mygo.NewMenu([]*mygo.MenuItem{
+					{Label: "打开面板", Click: func(*mygo.MenuItem, *mygo.Window) { openPanel() }},
+					mygo.Separator(),
+					{Label: "连接", Click: func(*mygo.MenuItem, *mygo.Window) { connect() }},
+					{Label: "断开", Click: func(*mygo.MenuItem, *mygo.Window) { rt.Agent.Disconnect() }},
+					mygo.Separator(),
+					{Label: "退出", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+				}),
+			}); err == nil {
+				_ = tray
+			} else {
+				fmt.Println("创建托盘失败:", err)
+			}
+		}
 	})
+
 	if err := mygo.App.Run(); err != nil {
 		log.Fatalf("运行窗口: %v", err)
 	}
+}
+
+// trayIcon 生成一个 16x16 的纯色图标，避免外部资源依赖。
+func trayIcon() ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, color.RGBA{R: 0x25, G: 0x63, B: 0xeb, A: 0xff})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
