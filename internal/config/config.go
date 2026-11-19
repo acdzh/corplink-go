@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Platform 表示飞连的登录方式。当前只实现 TPS（飞书/SSO 扫码）与密码。
@@ -118,3 +119,11 @@ func (c *Config) Save() error {
 
 // Path 返回配置文件路径。
 func (c *Config) Path() string { return c.path }
+
+// SessionPath 返回会话 Cookie 的落盘路径，与配置文件同目录，避免多份状态散落。
+func (c *Config) SessionPath() string {
+	if c.path == "" {
+		return "corplink.cookies.json"
+	}
+	return strings.TrimSuffix(c.path, ".json") + ".cookies.json"
+}

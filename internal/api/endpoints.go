@@ -26,12 +26,17 @@ type Endpoint struct {
 
 // 登录相关接口。
 var (
-	EndpointCompanyMatch = Endpoint{Path: "/api/match"}
-	EndpointLoginSetting = Endpoint{Path: "/api/login/setting"}
-	EndpointTPSLink      = Endpoint{Path: "/api/tpslogin/link"}
-	EndpointTPSToken     = Endpoint{Path: "/api/tpslogin/token/check"}
-	EndpointTPSDevice    = Endpoint{Path: "/api/tpslogin/device/callback"}
-	EndpointOTP          = Endpoint{Path: "/api/v2/p/otp"}
+	EndpointCompanyMatch  = Endpoint{Path: "/api/match"}
+	EndpointLoginSetting  = Endpoint{Path: "/api/login/setting"}
+	EndpointTPSLink       = Endpoint{Path: "/api/tpslogin/link"}
+	EndpointTPSToken      = Endpoint{Path: "/api/tpslogin/token/check"}
+	EndpointTPSDevice     = Endpoint{Path: "/api/tpslogin/device/callback"}
+	EndpointOTP           = Endpoint{Path: "/api/v2/p/otp"}
+	EndpointMFAType       = Endpoint{Path: "/api/mfa/type"}
+	EndpointMFACodeSend   = Endpoint{Path: "/api/mfa/code/send"}
+	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify"}
+	EndpointMFASend       = Endpoint{Path: "/api/v1/login/mfa/send"}
+	EndpointMFAVerify     = Endpoint{Path: "/api/v1/login/mfa/verify"}
 )
 
 // 隧道相关接口，签名参数取自服务端 http_sign_config。

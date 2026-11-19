@@ -91,3 +91,12 @@ type OtpInfo struct {
 	URL  string `json:"url"`
 	Code string `json:"code"`
 }
+
+// MfaType 是 /api/mfa/type 的返回，描述某个场景可用的二次认证方式。
+type MfaType struct {
+	MfaScene string   `json:"mfa_scene"`
+	Type     string   `json:"type"`
+	Types    []string `json:"types"`
+	Email    string   `json:"email"`
+	Mobile   string   `json:"mobile"`
+}

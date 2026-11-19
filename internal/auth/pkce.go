@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -20,13 +21,15 @@ type PKCE struct {
 }
 
 // NewPKCE 生成一组新的授权参数。
-// verifier 采用标准 base64（含填充），与官方客户端 Wireguard.generatePrivateKey 的字符串形态一致。
+//
+// verifier 采用小写 hex（64 字符），与官方客户端 Wireguard.generatePrivateKey 的输出形态一致；
+// 服务端只校验 challenge = S256(verifier) 的字符串关系，因此形态必须与客户端一致才能通过。
 func NewPKCE() (*PKCE, error) {
 	buf := make([]byte, verifierBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, fmt.Errorf("生成随机数: %w", err)
 	}
-	verifier := base64.StdEncoding.EncodeToString(buf)
+	verifier := hex.EncodeToString(buf)
 	return &PKCE{Verifier: verifier, Challenge: challengeOf(verifier)}, nil
 }
 

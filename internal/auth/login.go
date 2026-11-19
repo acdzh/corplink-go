@@ -78,7 +78,8 @@ func (s *Service) TokenCheck(ctx context.Context, token, verifier string) error 
 }
 
 // DeviceCallback 用授权码完成登录（移动端 PKCE 流程）。
-func (s *Service) DeviceCallback(ctx context.Context, aliasKey, code, state, verifier string) error {
+// 返回原始 data，便于上层判断服务端是否要求追加步骤（如 2FA）。
+func (s *Service) DeviceCallback(ctx context.Context, aliasKey, code, state, verifier string) (json.RawMessage, error) {
 	body := map[string]string{
 		"alias_key":     aliasKey,
 		"code":          code,
@@ -87,12 +88,80 @@ func (s *Service) DeviceCallback(ctx context.Context, aliasKey, code, state, ver
 	}
 	env, err := s.client.Do(ctx, api.EndpointTPSDevice, loginQuery(), body)
 	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	return env.Data, nil
+}
+
+// MfaType 查询某个 mfa_scene 下可用的二次认证方式。
+func (s *Service) MfaType(ctx context.Context, scene string) (*api.MfaType, error) {
+	env, err := s.client.Do(ctx, api.EndpointMFAType, url.Values{"mfa_scene": {scene}}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	out := &api.MfaType{}
+	if err := json.Unmarshal(env.Data, out); err != nil {
+		return nil, fmt.Errorf("解析 MFA 方式: %w", err)
+	}
+	return out, nil
+}
+
+// MfaCodeSend 用 MFA v2 接口下发验证码。
+func (s *Service) MfaCodeSend(ctx context.Context, scene, codeType string) error {
+	body := map[string]string{"mfa_scene": scene, "code_type": codeType}
+	env, err := s.client.Do(ctx, api.EndpointMFACodeSend, nil, body)
+	if err != nil {
 		return err
 	}
 	if !env.OK() {
 		return env.Error()
 	}
 	return nil
+}
+
+// MfaCodeVerify 用 MFA v2 接口校验验证码，成功后登录态才有效。
+func (s *Service) MfaCodeVerify(ctx context.Context, scene, codeType, code string) (json.RawMessage, error) {
+	body := map[string]string{"mfa_scene": scene, "code_type": codeType, "code": code}
+	env, err := s.client.Do(ctx, api.EndpointMFACodeVerify, nil, body)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	return env.Data, nil
+}
+
+// MfaSend 触发一次登录 MFA 验证码下发。loginScene 一般是 feilian，mfaType 为 email 或 mobile。
+func (s *Service) MfaSend(ctx context.Context, loginScene, mfaType, account string) (json.RawMessage, error) {
+	body := map[string]string{"login_scene": loginScene, "mfa_type": mfaType, "account": account}
+	env, err := s.client.Do(ctx, api.EndpointMFASend, nil, body)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	return env.Data, nil
+}
+
+// MfaVerify 提交 MFA 验证码，成功后登录态才真正建立。
+func (s *Service) MfaVerify(ctx context.Context, loginScene, mfaType, account, code string) (json.RawMessage, error) {
+	body := map[string]string{"login_scene": loginScene, "mfa_type": mfaType, "account": account, "code": code}
+	env, err := s.client.Do(ctx, api.EndpointMFAVerify, nil, body)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	return env.Data, nil
 }
 
 // OTP 拉取 TOTP 绑定信息（url 里带 secret），供二次验证自动生成验证码。
