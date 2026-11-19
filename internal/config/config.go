@@ -64,6 +64,10 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
+	// AutoMode 打开自动选路：定时测速并自动连接/切换到最快节点。
+	AutoMode bool `json:"auto_mode,omitempty"`
+	// AutoModeIntervalSeconds 是自动选路的测速间隔（秒），0 表示默认 300。
+	AutoModeIntervalSeconds int `json:"auto_mode_interval_seconds,omitempty"`
 	// AutoNode 是启动时自动连接的节点名，留空则不自动连接。
 	AutoNode string `json:"auto_node,omitempty"`
 	// KeepaliveSeconds 是会话保活间隔（秒），0 表示使用默认 1800。

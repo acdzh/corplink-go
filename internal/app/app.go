@@ -89,13 +89,20 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	defer startCancel()
 	ag := agent.New(startCtx, cfg, client)
 
-	autoNode := opts.AutoNode
-	if autoNode == "" {
-		autoNode = cfg.AutoNode
-	}
-	if autoNode != "" {
-		if err := ag.Connect(startCtx, autoNode); err != nil {
-			fmt.Printf("自动连接 %s 失败: %v\n", autoNode, err)
+	switch {
+	case cfg.AutoMode:
+		// 自动选路：后台定时测速并连接/切换到最快节点。
+		interval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
+		go ag.AutoSelect(runCtx, interval)
+	default:
+		autoNode := opts.AutoNode
+		if autoNode == "" {
+			autoNode = cfg.AutoNode
+		}
+		if autoNode != "" {
+			if err := ag.Connect(startCtx, autoNode); err != nil {
+				fmt.Printf("自动连接 %s 失败: %v\n", autoNode, err)
+			}
 		}
 	}
 

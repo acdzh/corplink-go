@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CorpLink Go</title>
+<title>一生プロキシしてくれる？</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -104,6 +104,10 @@
   <div class="row" style="gap:14px">
     <label class="muted">代理监听<input id="setProxy" style="display:block;width:190px;margin-top:4px"></label>
     <label class="muted">面板监听<input id="setPanel" style="display:block;width:190px;margin-top:4px"></label>
+    <label class="muted">自动选路<select id="setAutoMode" style="display:block;width:150px;margin-top:4px">
+      <option value="0">关闭（手动）</option><option value="1">开启（自动测速）</option>
+    </select></label>
+    <label class="muted">测速间隔(秒)<input id="setAutoInterval" type="number" style="display:block;width:130px;margin-top:4px"></label>
     <label class="muted">自动连接节点<input id="setAutoNode" placeholder="留空不自动连" style="display:block;width:190px;margin-top:4px"></label>
   </div>
   <div class="row" style="gap:14px;margin-top:12px">
@@ -128,7 +132,7 @@
   </div>
 </div>
 
-<p class="muted" style="text-align:center;margin:24px 0 8px">3710 · 13140 · 一生プロキシしてくれる？</p>
+<p class="muted" style="text-align:center;margin:24px 0 8px">13140 · 一生プロキシしてくれる？</p>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -287,6 +291,8 @@ async function loadSettings() {
   $('setProxy').value = s.proxy_listen || '';
   $('setPanel').value = s.panel_listen || '';
   $('setAutoNode').value = s.auto_node || '';
+  $('setAutoMode').value = s.auto_mode ? '1' : '0';
+  $('setAutoInterval').value = s.auto_mode_interval_seconds || 300;
   $('setKeepalive').value = s.keepalive_seconds || 0;
   $('setUser').value = s.socks5_username || '';
   $('setPass').value = s.socks5_password || '';
@@ -300,6 +306,8 @@ async function saveSettings() {
     body: JSON.stringify({
       proxy_listen: $('setProxy').value.trim(),
       panel_listen: $('setPanel').value.trim(),
+      auto_mode: $('setAutoMode').value === '1',
+      auto_mode_interval_seconds: parseInt($('setAutoInterval').value || '300', 10),
       auto_node: $('setAutoNode').value.trim(),
       keepalive_seconds: parseInt($('setKeepalive').value || '0', 10),
       socks5_username: $('setUser').value.trim(),

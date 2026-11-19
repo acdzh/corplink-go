@@ -6,9 +6,12 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -28,6 +31,8 @@ const (
 	connectTimeout = 30 * time.Second
 	// latencyTimeout 是测节点延迟的超时。
 	latencyTimeout = 6 * time.Second
+	// pingTimeout 是请求节点 /vpn/ping 的超时。
+	pingTimeout = 5 * time.Second
 )
 
 // Stats 是隧道流量与握手状态。
@@ -346,6 +351,117 @@ func (a *Agent) Warmup(ctx context.Context) {
 		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, _ = a.client.Do(probeCtx, ep, nil, nil)
 		cancel()
+	}
+}
+
+// PingAll 用官方客户端的测速接口（GET https://{ip}:{api_port}/vpn/ping）
+// 并发测所有节点，返回节点名到往返耗时的映射，失败为 -1。
+func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
+	nodes := a.Nodes()
+	out := make(map[string]int64, len(nodes))
+	type result struct {
+		name string
+		ms   int64
+	}
+	results := make(chan result, len(nodes))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, node := range nodes {
+		node := node
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results <- result{name: nodeName(node), ms: pingNode(ctx, node)}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		out[r.name] = r.ms
+	}
+	return out
+}
+
+// pingNode 请求节点的 /vpn/ping 并返回毫秒耗时，失败返回 -1。
+func pingNode(ctx context.Context, node api.VpnInfo) int64 {
+	client := &http.Client{
+		Timeout: pingTimeout,
+		Transport: &http.Transport{
+			// 节点使用自签证书，且这里只测连通性，不做身份校验。
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	url := fmt.Sprintf("https://%s:%d/vpn/ping", node.IP, node.APIPort)
+	reqCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return -1
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return -1
+	}
+	return time.Since(start).Milliseconds()
+}
+
+// AutoSelect 启动自动选路：定时测速，连上最快节点；当前节点明显变慢时切换。
+func (a *Agent) AutoSelect(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	// 启动时先跑一轮，避免等一个周期才连上。
+	a.autoRound(ctx)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.autoRound(ctx)
+		}
+	}
+}
+
+// autoRound 执行一轮"测速 + 择优 + 必要时切换"。
+func (a *Agent) autoRound(ctx context.Context) {
+	latencies := a.PingAll(ctx)
+	best := ""
+	var bestMs int64 = -1
+	for name, ms := range latencies {
+		if ms < 0 {
+			continue
+		}
+		if bestMs < 0 || ms < bestMs {
+			best, bestMs = name, ms
+		}
+	}
+	if best == "" {
+		return
+	}
+	state := a.State()
+	if !state.Connected {
+		if err := a.Connect(ctx, best); err == nil {
+			fmt.Printf("自动选路: 连接 %s（%dms）\n", best, bestMs)
+		}
+		return
+	}
+	currentMs := latencies[state.Node]
+	// 当前节点不可达，或比最优慢 40% 以上且差距超过 30ms 时切换。
+	shouldSwitch := currentMs < 0 || (bestMs >= 0 && currentMs > bestMs+30 && int64(float64(bestMs)*1.4) < currentMs)
+	if shouldSwitch && best != state.Node {
+		if err := a.Connect(ctx, best); err == nil {
+			fmt.Printf("自动选路: %s(%dms) -> %s(%dms)\n", state.Node, currentMs, best, bestMs)
+		}
 	}
 }
 

@@ -115,7 +115,7 @@ func Handler(opts Options) http.Handler {
 		}
 		writeJSON(w, map[string]int{"nodes": len(opts.Agent.Nodes())})
 	})
-	mux.HandleFunc("/sub", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, _ *http.Request) {
 		body := sub.Single(sub.SingleOptions{
 			Name:     "CORPLINK",
 			Host:     opts.ProxyHost,
@@ -241,7 +241,7 @@ func Handler(opts Options) http.Handler {
 	})
 	mux.HandleFunc("/api/sub", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{
-			"url": fmt.Sprintf("http://%s/sub", opts.PanelHost),
+			"url": fmt.Sprintf("http://%s/clash.yml", opts.PanelHost),
 		})
 	})
 
@@ -266,6 +266,10 @@ type settingsPayload struct {
 	ProxyListen *string `json:"proxy_listen"`
 	// PanelListen 是控制面板监听地址。
 	PanelListen *string `json:"panel_listen"`
+	// AutoMode 打开自动选路。
+	AutoMode *bool `json:"auto_mode"`
+	// AutoModeIntervalSeconds 是测速间隔（秒）。
+	AutoModeIntervalSeconds *int `json:"auto_mode_interval_seconds"`
 	// AutoNode 是启动时自动连接的节点。
 	AutoNode *string `json:"auto_node"`
 	// KeepaliveSeconds 是会话保活间隔（秒）。
@@ -288,13 +292,15 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		panelListen = "127.0.0.1:13140"
 	}
 	return settingsPayload{
-		ProxyListen:      &proxyListen,
-		PanelListen:      &panelListen,
-		AutoNode:         &cfg.AutoNode,
-		KeepaliveSeconds: &cfg.KeepaliveSeconds,
-		SocksUser:        &cfg.SocksUser,
-		SocksPass:        &cfg.SocksPass,
-		LogLevel:         &cfg.LogLevel,
+		ProxyListen:             &proxyListen,
+		PanelListen:             &panelListen,
+		AutoMode:                &cfg.AutoMode,
+		AutoModeIntervalSeconds: &cfg.AutoModeIntervalSeconds,
+		AutoNode:                &cfg.AutoNode,
+		KeepaliveSeconds:        &cfg.KeepaliveSeconds,
+		SocksUser:               &cfg.SocksUser,
+		SocksPass:               &cfg.SocksPass,
+		LogLevel:                &cfg.LogLevel,
 	}
 }
 
@@ -323,6 +329,17 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 			cfg.PanelListen = v
 			restart = append(restart, "panel_listen")
 		}
+	}
+	if in.AutoMode != nil && *in.AutoMode != cfg.AutoMode {
+		cfg.AutoMode = *in.AutoMode
+		restart = append(restart, "auto_mode")
+	}
+	if in.AutoModeIntervalSeconds != nil && *in.AutoModeIntervalSeconds != cfg.AutoModeIntervalSeconds {
+		if *in.AutoModeIntervalSeconds < 0 {
+			return nil, fmt.Errorf("自动选路间隔不能为负")
+		}
+		cfg.AutoModeIntervalSeconds = *in.AutoModeIntervalSeconds
+		restart = append(restart, "auto_mode_interval_seconds")
 	}
 	if in.AutoNode != nil {
 		v := strings.TrimSpace(*in.AutoNode)
