@@ -127,6 +127,14 @@ func Start(cfg Config) (*Tunnel, error) {
 	return t, nil
 }
 
+// SocksAddr 返回 SOCKS5 实际监听地址（监听 0 端口时可拿到动态端口）。
+func (t *Tunnel) SocksAddr() string {
+	if t.listen == nil {
+		return ""
+	}
+	return t.listen.Addr().String()
+}
+
 // DialContext 直接在隧道内发起连接，用于排查 SOCKS5 与 netstack 之间的问题。
 func (t *Tunnel) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return t.net.DialContext(ctx, network, addr)

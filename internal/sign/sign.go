@@ -12,6 +12,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+
+	"github.com/acdzh/corplink-go/internal/api"
 )
 
 // secret 是官方客户端内置的 HKDF 输入密钥（不是设备密钥）。
@@ -124,4 +126,11 @@ func appendVarint(dst []byte, value uint64) []byte {
 		value >>= 7
 	}
 	return append(dst, byte(value))
+}
+
+// NewSigner 返回绑定指定租户与设备的签名器，供 api.Client 使用。
+func NewSigner(activateCode, deviceID string) api.Signer {
+	return func(ep api.Endpoint, method string, u *url.URL, body []byte, cookie, csrf, jwt string) (string, error) {
+		return Header(ep.SigningInputParams, activateCode, deviceID, method, u, body, cookie, csrf, jwt)
+	}
 }

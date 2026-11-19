@@ -65,6 +65,14 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
+	// SubListen 是订阅与控制接口的监听地址。
+	SubListen string `json:"sub_listen,omitempty"`
+	// SubToken 是订阅路径里的随机标识，避免被扫描。
+	SubToken string `json:"sub_token,omitempty"`
+	// HealthURL 是隧道内用于探测连通性的地址。
+	HealthURL string `json:"health_url,omitempty"`
+	// PreferNode 是优先节点名，留空按延迟自动选。
+	PreferNode string `json:"prefer_node,omitempty"`
 	// SocksListen 是用户态代理监听地址。
 	SocksListen string `json:"socks5_listen,omitempty"`
 	// SocksUser 与 SocksPass 非空时给 SOCKS5 启用 RFC1929 认证。

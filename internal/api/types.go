@@ -1,7 +1,10 @@
 // Package api 封装飞连服务端的 HTTP 协议：地址模板、请求头、Cookie 与签名。
 package api
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Envelope 是所有飞连接口的统一响应外壳。
 type Envelope struct {
@@ -133,4 +136,13 @@ type WgInfo struct {
 	PublicKey string    `json:"public_key"`
 	Setting   WgSetting `json:"setting"`
 	Mode      uint32    `json:"mode"`
+}
+
+// ParseWgInfo 解析 /vpn/conn 的返回。
+func ParseWgInfo(raw []byte) (*WgInfo, error) {
+	out := &WgInfo{}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return nil, fmt.Errorf("解析隧道配置: %w", err)
+	}
+	return out, nil
 }

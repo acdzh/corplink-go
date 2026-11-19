@@ -56,6 +56,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "proxy 失败:", err)
 			os.Exit(1)
 		}
+	case "serve":
+		if err := runServe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "serve 失败:", err)
+			os.Exit(1)
+		}
 	case "version", "-v", "--version":
 		fmt.Println("corplink-go", version)
 	case "help", "-h", "--help":
@@ -74,6 +79,7 @@ func usage() {
   corplink-go list   [-config ./config.json] [-v]
   corplink-go connect [-config ./config.json] [-v]
   corplink-go proxy  [-config ./config.json] [-name <节点>] [-listen 127.0.0.1:1080] [-v]
+  corplink-go serve  [-config ./config.json] [-listen 127.0.0.1:8081] [-port-base 12001] [-max-tunnels 2]
   corplink-go version
 `)
 }
