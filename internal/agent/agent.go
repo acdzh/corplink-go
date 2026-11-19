@@ -210,6 +210,42 @@ func (a *Agent) Disconnect() {
 	}
 }
 
+// Keepalive 定期调用一个轻量接口，维持服务端会话并检测是否被踢。
+//
+// 服务端不下发会话过期时间（Set-Cookie 里没有 Max-Age，/api/info/me 也没有 TTL 字段），
+// 因此采用"低频探活 + 立即识别 101"的策略，而不是高频轮询。
+func (a *Agent) Keepalive(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 20 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			env, err := a.client.Do(probeCtx, api.EndpointInfoMe, nil, nil)
+			cancel()
+			a.mu.Lock()
+			switch {
+			case err != nil:
+				a.lastErr = err
+			case !env.OK():
+				a.lastErr = env.Error()
+			default:
+				a.lastErr = nil
+			}
+			a.mu.Unlock()
+			if err == nil && env.OK() {
+				// 服务端若刷新了 Cookie，落盘保存，避免重启后失效。
+				_ = a.client.SaveCookies(a.cfg.SessionPath())
+			}
+		}
+	}
+}
+
 // Latency 测节点 API 端口的 TLS 建连耗时，用毫秒表示。
 func (a *Agent) Latency(ctx context.Context, name string) (int64, error) {
 	node, err := a.pick(name)

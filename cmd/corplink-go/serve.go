@@ -29,6 +29,7 @@ func runServe(args []string) error {
 	proxyAddr := fs.String("proxy", "", "混合代理监听地址（SOCKS5 + HTTP），默认取配置 socks5_listen")
 	panelAddr := fs.String("panel", "", "控制面板监听地址，默认取配置 panel_listen")
 	nodeName := fs.String("name", "", "启动时自动连接的节点名，留空不自动连")
+	keepalive := fs.Duration("keepalive", 30*time.Minute, "会话保活间隔，0 表示关闭")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -78,6 +79,10 @@ func runServe(args []string) error {
 	if proxyListen == "" {
 		proxyListen = "127.0.0.1:3710"
 	}
+	if *keepalive > 0 {
+		go ag.Keepalive(ctx, *keepalive)
+	}
+
 	proxyLn, err := net.Listen("tcp", proxyListen)
 	if err != nil {
 		return fmt.Errorf("监听代理端口 %s: %w", proxyListen, err)

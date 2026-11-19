@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/acdzh/corplink-go/internal/api"
 )
@@ -151,14 +150,6 @@ func (c *Config) SessionPath() string {
 		return "session.json"
 	}
 	return filepath.Join(filepath.Dir(c.path), "session.json")
-}
-
-// LegacySessionPath 返回旧版会话文件路径（<config>.cookies.json），用于兼容迁移。
-func (c *Config) LegacySessionPath() string {
-	if c.path == "" {
-		return "corplink.cookies.json"
-	}
-	return strings.TrimSuffix(c.path, ".json") + ".cookies.json"
 }
 
 // Dir 返回数据目录（配置文件所在目录）。
