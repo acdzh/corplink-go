@@ -184,11 +184,11 @@ func (c *Config) EnsureDeviceID() (bool, error) {
 //
 // CLI 与桌面版共用同一份数据，避免"命令里登录了、桌面版还说未登录"这类分裂。
 func DefaultPath() (string, error) {
-	dir, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("定位用户配置目录: %w", err)
+		return "", fmt.Errorf("定位用户目录: %w", err)
 	}
-	return filepath.Join(dir, "CorpLinkGo", "config.json"), nil
+	return filepath.Join(home, ".corplink-go", "config.json"), nil
 }
 
 // Dir 返回数据目录（配置文件所在目录）。

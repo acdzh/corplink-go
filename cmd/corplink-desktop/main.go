@@ -40,11 +40,11 @@ func main() {
 
 	path := *cfgPath
 	if path == "" {
-		dir, err := os.UserConfigDir()
+		p, err := config.DefaultPath()
 		if err != nil {
-			log.Fatalf("定位用户配置目录: %v", err)
+			log.Fatalf("定位配置路径: %v", err)
 		}
-		path = dir + "/CorpLinkGo/config.json"
+		path = p
 	}
 	cfg, err := config.Load(path)
 	if err != nil {

@@ -81,7 +81,7 @@ DNS 使用 fake-ip，内网域名不依赖本机 DNS。
 全部状态放在同一个数据目录里：
 
 ```
-<data-dir>/
+<data-dir>/（默认 ~/.corplink-go）
 ├── config.json   非敏感配置（租户、设备标识、端口、模式）
 └── session.json  Cookie 与登录态（0600，切勿提交）
 ```
@@ -109,7 +109,7 @@ go build -o corplink-desktop ./cmd/corplink-desktop
 ```
 
 原生窗口 + 菜单栏托盘，内部跑同一套运行时，浏览器面板照常可用。
-配置默认放在用户配置目录（macOS: `~/Library/Application Support/CorpLinkGo`）。
+配置默认放在用户配置目录（`~/.corplink-go`）。
 
 ## 开发
 
