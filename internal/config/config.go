@@ -65,8 +65,11 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
-	// SocksListen 是用户态代理监听地址；为空时走内核 TUN 模式（后续实现）。
+	// SocksListen 是用户态代理监听地址。
 	SocksListen string `json:"socks5_listen,omitempty"`
+	// SocksUser 与 SocksPass 非空时给 SOCKS5 启用 RFC1929 认证。
+	SocksUser string `json:"socks5_username,omitempty"`
+	SocksPass string `json:"socks5_password,omitempty"`
 
 	// LogLevel 控制日志详细程度。
 	LogLevel string `json:"log_level,omitempty"`
