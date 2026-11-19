@@ -92,7 +92,7 @@ func runServe(args []string) error {
 	if activate == "" {
 		activate = cfg.CompanyName
 	}
-	manager := vpn.NewManager(client, config.Meta(cfg), activate, cfg.DeviceID, *maxTunnels)
+	manager := vpn.NewManager(client, config.Meta(cfg), activate, cfg.DeviceID, *maxTunnels, routes)
 	defer manager.Close()
 	go manager.Reap(ctx)
 

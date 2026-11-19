@@ -42,6 +42,8 @@ func YAML(opts Options) string {
 	}
 
 	var b strings.Builder
+	// 只用 rule 模式 + select 组：不生成 url-test/fallback，避免内核自动选路和自动测速。
+	b.WriteString("mode: rule\n")
 	b.WriteString("proxies:\n")
 	names := make([]string, 0, len(opts.Entries))
 	for _, e := range opts.Entries {
