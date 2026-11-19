@@ -90,6 +90,7 @@ func runConnect(args []string) error {
 	fmt.Printf("对端公钥: %s\n", info.PublicKey)
 	fmt.Printf("DNS: %s（备用 %s）\n", info.Setting.VpnDNS, info.Setting.VpnDNSBackup)
 	fmt.Printf("分流路由 %d 条 / 全量路由 %d 条\n", len(info.Setting.VpnRouteSplit), len(info.Setting.VpnRouteFull))
+	fmt.Println("全量路由明细:", info.Setting.VpnRouteFull)
 	for i, r := range info.Setting.VpnRouteSplit {
 		if i >= 8 {
 			fmt.Printf("  ... 其余 %d 条\n", len(info.Setting.VpnRouteSplit)-8)
