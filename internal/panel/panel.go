@@ -111,6 +111,9 @@ func Handler(opts Options) http.Handler {
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Stats())
 	})
+	mux.HandleFunc("/api/latencies", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, opts.Agent.Latencies())
+	})
 	mux.HandleFunc("/api/latency/all", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()

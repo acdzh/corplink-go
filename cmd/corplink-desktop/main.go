@@ -10,10 +10,14 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"log"
+	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,18 +25,48 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/acdzh/corplink-go/internal/agent"
+	"github.com/acdzh/corplink-go/internal/api"
 	"github.com/acdzh/corplink-go/internal/app"
 	"github.com/acdzh/corplink-go/internal/config"
 )
 
 // uiState 是窗口本地状态。
+//
+// selected 只表示"列表里选中了谁"，与是否连接无关：
+// 选中项决定点「连接」时连哪个，连接/断开由按钮控制。
 type uiState struct {
-	tab     int
-	latency map[string]int64
-	testing bool
+	tab      int
+	selected string
+	// icons 是节点图标缓存，键为节点名；后台从 /api/icon 拉取。
+	iconMu sync.Mutex
+	icons  map[string]ui.ImageSource
+}
+
+// iconCount 返回已缓存图标数量。
+func (s *uiState) iconCount() int {
+	s.iconMu.Lock()
+	defer s.iconMu.Unlock()
+	return len(s.icons)
+}
+
+// iconOf 读取图标缓存。
+func (s *uiState) iconOf(name string) ui.ImageSource {
+	s.iconMu.Lock()
+	defer s.iconMu.Unlock()
+	return s.icons[name]
+}
+
+// setIcon 写入图标缓存。
+func (s *uiState) setIcon(name string, src ui.ImageSource) {
+	s.iconMu.Lock()
+	defer s.iconMu.Unlock()
+	s.icons[name] = src
 }
 
 var navItems = []string{"节点", "流量", "日志", "关于"}
+
+// httpClient 用于拉取本地面板资源（节点图标）。
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 func main() {
 	cfgPath := flag.String("config", "", "配置文件路径，默认 <用户配置目录>/CorpLinkGo/config.json")
@@ -69,10 +103,20 @@ func main() {
 		mygo.App.Quit()
 	}()
 
-	st := &uiState{latency: map[string]int64{}}
+	st := &uiState{selected: cfg.Mode, icons: map[string]ui.ImageSource{}}
 	var win *mygo.Window
 
 	connect := func(name string) {
+		if name == "__first__" {
+			nodes := rt.Agent.Nodes()
+			if len(nodes) == 0 {
+				return
+			}
+			name = displayName(nodes[0].EnName, nodes[0].Name, nodes[0].IP)
+		}
+		if name == "" {
+			return
+		}
 		go func() {
 			if err := rt.Agent.Connect(context.Background(), name); err != nil {
 				fmt.Println("连接失败:", err)
@@ -82,18 +126,38 @@ func main() {
 			}
 		}()
 	}
-	testAll := func() {
-		if st.testing {
-			return
-		}
-		st.testing = true
-		go func() {
-			st.latency = rt.Agent.LatencyAll(context.Background())
-			st.testing = false
-			if win != nil {
-				win.Invalidate()
+
+	// loadIcons 后台拉取节点图标（面板 /api/icon 已带会话代理）。
+	loadIcons := func(base string, nodes []api.VpnInfo) {
+		for _, n := range nodes {
+			if n.Icon == "" {
+				continue
 			}
-		}()
+			name := displayName(n.EnName, n.Name, n.IP)
+			if st.iconOf(name) != nil {
+				continue
+			}
+			icon := n.Icon
+			go func(key, url string) {
+				resp, err := httpClient.Get(base + "/api/icon?u=" + neturl.QueryEscape(url))
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
+				data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+				if err != nil {
+					return
+				}
+				bitmap, err := ui.DecodeBitmap(data)
+				if err != nil {
+					return
+				}
+				st.setIcon(key, bitmap)
+				if win != nil {
+					win.Invalidate()
+				}
+			}(name, icon)
+		}
 	}
 
 	// sidebar 画左侧栏：有系统材质时不铺底色，让毛玻璃透出来。
@@ -141,6 +205,7 @@ func main() {
 		state := rt.Agent.State()
 		stats := rt.Agent.Stats()
 		nodes := rt.Agent.Nodes()
+		latencies := rt.Agent.Latencies()
 
 		ui.Row(c).Fill().Children(func() {
 			sidebar(c, p, state)
@@ -150,11 +215,11 @@ func main() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 					ui.Text(c, navItems[st.tab]).FontSize(fsH1).Bold().TextColor(p.Heading)
 					ui.Spacer(c)
-					if st.testing {
-						ui.Spinner(c)
-					}
 				})
 
+				if st.tab == 0 && st.iconCount() == 0 {
+					loadIcons(panelURL, nodes)
+				}
 				switch st.tab {
 				case 0:
 					card(c, p, func() {
@@ -166,9 +231,6 @@ func main() {
 								rt.Agent.Disconnect()
 								c.Invalidate()
 							}
-							if ui.Button(c, "测速").Clicked() {
-								testAll()
-							}
 							ui.Spacer(c)
 							sub := "未建立隧道"
 							if state.Connected {
@@ -179,66 +241,44 @@ func main() {
 					})
 					ui.Scroll(c).Grow(1).Children(func() {
 						ui.Column(c).Gap(8).Children(func() {
-							// 「自动」是列表里的一项，不是独立开关。
-							autoOn := rt.Agent.Auto()
-							autoBg := p.Card
-							if autoOn {
-								autoBg = p.OkBg
-							}
-							ui.Row(c).Key("__auto__").FillWidth().Radius(radiusCard).Padding(10, 14).
-								AlignItems(ui.Center).Background(autoBg).Border(1, p.Border).Children(func() {
-								ui.Column(c).Gap(1).Grow(1).Children(func() {
-									label := "自动选择"
-									if autoOn {
-										label = "✓ 自动选择"
+							// 列表只负责"选中"，连接由上方按钮控制。
+							row := func(key, label, right string, icon ui.ImageSource, picked, connected bool, onClick func()) {
+								ui.Row(c).Key(key).FillWidth().Radius(radiusRow).Height(34).
+									Padding(0, 10).AlignItems(ui.Center).
+									Background(pickBg(p, picked)).OnClick(onClick).Children(func() {
+									// 无图标时占位，保证文字对齐
+									if icon != nil {
+										ui.Image(c, icon).Size(18, 13).Fit(ui.Contain)
+									} else {
+										ui.Box(c).Size(18, 13)
 									}
-									ui.Text(c, label).FontSize(fsBody).TextColor(p.Text).SingleLine()
-									ui.Text(c, "按测速结果连接最快节点").FontSize(fsTiny).TextColor(p.Faint).SingleLine()
+									ui.Box(c).Width(9)
+									ui.Text(c, label).FontSize(fsBody).TextColor(p.Text).Grow(1).SingleLine()
+									if connected {
+										ui.Text(c, "使用中").FontSize(fsTiny).TextColor(p.Green)
+										ui.Box(c).Width(8)
+									}
+									ui.Text(c, right).FontSize(fsSmall).TextColor(p.Faint).Width(52)
 								})
-								if !autoOn {
-									if ui.Button(c, "连接").Clicked() {
-										connect("auto")
-									}
-								}
-							})
+							}
+							row("__auto__", mark(st.selected == "auto", "自动选择"), "", nil,
+								st.selected == "auto", false, func() { st.selected = "auto" })
 							for _, n := range nodes {
 								name := displayName(n.EnName, n.Name, n.IP)
-								lat := ""
-								if ms, ok := st.latency[name]; ok {
-									if ms < 0 {
-										lat = "超时"
-									} else {
-										lat = fmt.Sprintf("%d ms", ms)
-									}
+								ms, has := latencies[name]
+								lat := "–"
+								switch {
+								case !has:
+									lat = "–"
+								case ms < 0:
+									lat = "超时"
+								default:
+									lat = fmt.Sprintf("%d ms", ms)
 								}
-								current := state.Connected && state.Node == name
-								bg := p.Card
-								if current {
-									bg = p.OkBg
-								}
-								ui.Row(c).Key(name).FillWidth().Radius(radiusCard).Padding(10, 14).
-									AlignItems(ui.Center).Background(bg).Border(1, p.Border).Children(func() {
-									ui.Column(c).Gap(1).Grow(1).Children(func() {
-										label := name
-										if current {
-											label = "✓ " + name
-										}
-										ui.Text(c, label).FontSize(fsBody).TextColor(p.Text).SingleLine()
-										sub := protoName(n.ProtocolMode)
-										if lat != "" {
-											sub += " · " + lat
-										}
-										if n.TagName != "" {
-											sub = n.TagName + " · " + sub
-										}
-										ui.Text(c, sub).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
-									})
-									if !current {
-										if ui.Button(c, "连接").Clicked() {
-											connect(name)
-										}
-									}
-								})
+								node := name
+								row(name, mark(st.selected == node, node), lat, st.iconOf(node),
+									st.selected == node, state.Connected && state.Node == node,
+									func() { st.selected = node })
 							}
 							if len(nodes) == 0 {
 								ui.Text(c, "没有节点，先在面板完成登录").FontSize(fsSmall).TextColor(p.Faint)
@@ -359,22 +399,38 @@ func main() {
 			if rt.Agent.Auto() {
 				header += "（自动）"
 			}
-			var nodeItems []*mygo.MenuItem
+			// 选择与连接解耦：子菜单只改选中项，连接由上面的「连接」按钮触发。
+			selectOnly := func(name string) {
+				st.selected = name
+				if win != nil {
+					win.Invalidate()
+				}
+			}
+			autoLabel := "自动选择"
+			if st.selected == "auto" {
+				autoLabel = "✓ 自动选择"
+			}
+			nodeItems := []*mygo.MenuItem{{
+				Label: autoLabel,
+				Click: func(*mygo.MenuItem, *mygo.Window) { selectOnly("auto") },
+			}, mygo.Separator()}
 			for _, n := range rt.Agent.Nodes() {
 				name := displayName(n.EnName, n.Name, n.IP)
 				label := name
-				if state.Connected && state.Node == name {
+				if st.selected == name {
 					label = "✓ " + name
 				}
 				node := name
 				nodeItems = append(nodeItems, &mygo.MenuItem{
 					Label: label,
-					Click: func(*mygo.MenuItem, *mygo.Window) { connect(node) },
+					Click: func(*mygo.MenuItem, *mygo.Window) { selectOnly(node) },
 				})
 			}
 			items := []*mygo.MenuItem{
 				{Label: header, Disabled: true},
-				{Label: "自动选择（最快）", Click: func(*mygo.MenuItem, *mygo.Window) { connect("auto") }},
+				{Label: "连接", Disabled: state.Connected, Click: func(*mygo.MenuItem, *mygo.Window) {
+					connect(st.selected)
+				}},
 				{Label: "断开", Disabled: !state.Connected, Click: func(*mygo.MenuItem, *mygo.Window) {
 					rt.Agent.Disconnect()
 				}},
@@ -404,6 +460,22 @@ func main() {
 	if err := mygo.App.Run(); err != nil {
 		log.Fatalf("运行窗口: %v", err)
 	}
+}
+
+// mark 给选中项加勾。
+func mark(picked bool, label string) string {
+	if picked {
+		return "✓ " + label
+	}
+	return label
+}
+
+// pickBg 返回选中行的背景色。
+func pickBg(p palette, picked bool) ui.Color {
+	if picked {
+		return p.AccentBg
+	}
+	return p.Card
 }
 
 // statTile 画一个指标卡片。

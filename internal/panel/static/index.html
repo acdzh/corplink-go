@@ -110,7 +110,7 @@
   <section class="card">
     <div class="row spread" style="margin-bottom:12px">
       <h2 style="margin:0">节点 <span class="muted" id="nodeCount"></span></h2>
-      <button id="btnLatencyAll">全部测速</button>
+
     </div>
     <table>
       <thead><tr><th>节点</th><th>标签</th><th>协议</th><th>延迟</th><th>内网地址</th><th></th></tr></thead>
@@ -299,10 +299,9 @@ async function connect() {
   } finally { $('btnConnect').disabled = false; refreshStatus(); }
 }
 async function disconnect() { await api('/api/disconnect', { method: 'POST' }); refreshStatus(); }
-async function latencyAll() {
-  $('btnLatencyAll').disabled = true;
-  try { latency = await api('/api/latency/all'); renderNodes(); }
-  finally { $('btnLatencyAll').disabled = false; }
+async function refreshLatency() {
+  latency = await api('/api/latencies');
+  renderNodes();
 }
 async function refreshNodes() { await api('/api/refresh', { method: 'POST' }); await loadNodes(); }
 
@@ -397,7 +396,7 @@ async function logout() { await api('/api/logout', { method: 'POST' }); $('login
 $('btnConnect').onclick = connect;
 $('btnDisconnect').onclick = disconnect;
 $('btnRefresh').onclick = refreshNodes;
-$('btnLatencyAll').onclick = latencyAll;
+
 $('btnSaveSettings').onclick = saveSettings;
 $('btnCopySub').onclick = () => navigator.clipboard.writeText($('subUrl').textContent);
 $('btnLogin').onclick = startLogin;
@@ -411,6 +410,8 @@ setInterval(refreshStatus, 3000);
 setInterval(refreshStats, 2000);
 setInterval(refreshTotp, 1000);
 setInterval(refreshLogs, 4000);
+refreshLatency();
+setInterval(refreshLatency, 30000);
 </script>
 </body>
 </html>

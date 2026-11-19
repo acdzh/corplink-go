@@ -95,19 +95,12 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	defer startCancel()
 	ag := agent.New(startCtx, cfg, client)
 
-	mode := opts.AutoNode
-	if mode == "" {
-		mode = cfg.Mode
-	}
-	if mode == "auto" {
-		// 自动选路：后台定时测速并连接/切换到最快节点。
-		interval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
+	// 启动只做两件事：拉节点、开始测速。连接一律等用户主动触发。
+	latencyInterval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
+	ag.PollLatency(runCtx, latencyInterval)
+	if cfg.Mode == "auto" {
 		ag.SetAuto(true)
-		go ag.AutoSelect(runCtx, interval)
-	} else if mode != "" {
-		if err := ag.Connect(startCtx, mode); err != nil {
-			fmt.Printf("自动连接 %s 失败: %v\n", mode, err)
-		}
+		go ag.AutoSelect(runCtx, latencyInterval)
 	}
 
 	keepalive := opts.Keepalive

@@ -32,7 +32,7 @@ const (
 	// latencyTimeout 是测节点延迟的超时。
 	latencyTimeout = 6 * time.Second
 	// pingTimeout 是请求节点 /vpn/ping 的超时。
-	pingTimeout = 5 * time.Second
+	pingTimeout = 1500 * time.Millisecond
 )
 
 // Stats 是隧道流量与握手状态。
@@ -77,11 +77,13 @@ type Agent struct {
 
 	mu sync.RWMutex
 	// auto 为真时后台循环会自动选最优节点。
-	auto    bool
-	events  []Event
-	nodes   []api.VpnInfo
-	current *active
-	lastErr error
+	auto bool
+	// latencies 是最近一次测速结果，节点名 -> 毫秒（-1 表示失败）。
+	latencies map[string]int64
+	events    []Event
+	nodes     []api.VpnInfo
+	current   *active
+	lastErr   error
 }
 
 // active 是一条活动隧道及其元信息。
@@ -98,7 +100,7 @@ type active struct {
 //
 // 拉取失败（例如会话过期）不阻塞启动：面板仍可打开，便于在界面里重新登录。
 func New(ctx context.Context, cfg *config.Config, client *api.Client) *Agent {
-	a := &Agent{cfg: cfg, client: client, meta: config.Meta(cfg)}
+	a := &Agent{cfg: cfg, client: client, meta: config.Meta(cfg), latencies: map[string]int64{}}
 	if err := a.RefreshNodes(ctx); err != nil {
 		a.lastErr = err
 	}
@@ -346,7 +348,7 @@ func (a *Agent) LatencyAll(ctx context.Context) map[string]int64 {
 		ms   int64
 	}
 	results := make(chan result, len(nodes))
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, 32)
 	var wg sync.WaitGroup
 	for _, node := range nodes {
 		node := node
@@ -385,6 +387,39 @@ func (a *Agent) Warmup(ctx context.Context) {
 	}
 }
 
+// Latencies 返回最近一次测速结果（节点名 -> 毫秒，-1 表示失败）。
+func (a *Agent) Latencies() map[string]int64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make(map[string]int64, len(a.latencies))
+	for k, v := range a.latencies {
+		out[k] = v
+	}
+	return out
+}
+
+// PollLatency 后台定期测速并缓存结果，供界面直接展示延迟。
+// 只测速，不触发任何连接。
+func (a *Agent) PollLatency(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	refresh := func() { a.PingAll(ctx) }
+	go func() {
+		refresh()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refresh()
+			}
+		}
+	}()
+}
+
 // PingAll 用官方客户端的测速接口（GET https://{ip}:{api_port}/vpn/ping）
 // 并发测所有节点，返回节点名到往返耗时的映射，失败为 -1。
 func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
@@ -395,7 +430,7 @@ func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
 		ms   int64
 	}
 	results := make(chan result, len(nodes))
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, 32)
 	var wg sync.WaitGroup
 	for _, node := range nodes {
 		node := node
@@ -404,7 +439,16 @@ func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results <- result{name: nodeName(node), ms: pingNode(ctx, node)}
+			name := nodeName(node)
+			ms := pingNode(ctx, node)
+			// 边测边写：界面能逐条看到延迟，而不是等全部测完。
+			a.mu.Lock()
+			if a.latencies == nil {
+				a.latencies = map[string]int64{}
+			}
+			a.latencies[name] = ms
+			a.mu.Unlock()
+			results <- result{name: name, ms: ms}
 		}()
 	}
 	wg.Wait()
@@ -547,6 +591,11 @@ func (a *Agent) autoRound(ctx context.Context) {
 	if !a.Auto() {
 		return
 	}
+	state := a.State()
+	// 未连接时不做任何事：启动不自动连，等用户主动点。
+	if !state.Connected {
+		return
+	}
 	latencies := a.PingAll(ctx)
 	best := ""
 	var bestMs int64 = -1
@@ -559,13 +608,6 @@ func (a *Agent) autoRound(ctx context.Context) {
 		}
 	}
 	if best == "" {
-		return
-	}
-	state := a.State()
-	if !state.Connected {
-		if err := a.connectNode(ctx, best); err == nil {
-			fmt.Printf("自动选路: 连接 %s（%dms）\n", best, bestMs)
-		}
 		return
 	}
 	currentMs := latencies[state.Node]
