@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/acdzh/corplink-go/internal/agent"
+	"github.com/acdzh/corplink-go/internal/api"
 	"github.com/acdzh/corplink-go/internal/config"
 	"github.com/acdzh/corplink-go/internal/login"
 	"github.com/acdzh/corplink-go/internal/sub"
@@ -33,6 +34,8 @@ type Options struct {
 	Agent *agent.Agent
 	// Login 是登录流程服务。
 	Login *login.Service
+	// Client 是已登录的 API 客户端，用于代理节点图标等资源。
+	Client *api.Client
 	// Config 是运行配置。
 	Config *config.Config
 	// ProxyHost 与 ProxyPort 是订阅里写的代理地址。
@@ -81,6 +84,26 @@ func Handler(opts Options) http.Handler {
 			})
 		}
 		writeJSON(w, out)
+	})
+	mux.HandleFunc("/api/icon", func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.Query().Get("u")
+		if target == "" {
+			http.NotFound(w, r)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		data, contentType, err := opts.Client.GetRaw(ctx, target)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if contentType == "" {
+			contentType = "image/png"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Events())

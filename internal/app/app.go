@@ -134,6 +134,7 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	handler := panel.Handler(panel.Options{
 		Agent:     ag,
 		Login:     login.New(client, cfg, ag),
+		Client:    client,
 		Config:    cfg,
 		ProxyHost: proxyLn.Addr().(*net.TCPAddr).IP.String(),
 		ProxyPort: proxyLn.Addr().(*net.TCPAddr).Port,

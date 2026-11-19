@@ -125,6 +125,37 @@ func withMetaDefaults(m Meta) Meta {
 }
 
 // SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
+// GetRaw 以当前会话拉取一个原始资源（如图片），仅允许本企业域名。
+func (c *Client) GetRaw(ctx context.Context, target string) ([]byte, string, error) {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil, "", err
+	}
+	// 比较主机名（忽略端口），base 里通常带 :443。
+	if !strings.EqualFold(u.Hostname(), c.base.Hostname()) {
+		return nil, "", fmt.Errorf("只允许拉取 %s 的资源", c.base.Hostname())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", c.ua)
+	req.Header.Set("Accept-Language", c.acceptLanguage())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("拉取资源返回 %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	return data, resp.Header.Get("Content-Type"), nil
+}
+
 // HasSession 判断 cookie jar 里是否已有登录会话。
 func (c *Client) HasSession() bool {
 	for _, ck := range c.Cookies() {
