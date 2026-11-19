@@ -49,18 +49,6 @@ type Options struct {
 }
 
 // Runtime 是已启动的运行时。
-// ExitRuntime 是一个运行中的额外出口。
-type ExitRuntime struct {
-	// Name 是出口名。
-	Name string
-	// Node 是连接的节点。
-	Node string
-	// ProxyAddr 是本地监听地址。
-	ProxyAddr string
-	// Agent 是该出口的隧道管理器。
-	Agent *agent.Agent
-}
-
 type Runtime struct {
 	// Agent 是隧道管理器。
 	Agent *agent.Agent
@@ -72,8 +60,6 @@ type Runtime struct {
 	PanelAddr string
 	// Client 是共享的 API 客户端。
 	Client *api.Client
-	// Exits 是额外出口及其本地端口。
-	Exits []ExitRuntime
 
 	server *http.Server
 	cancel context.CancelFunc
@@ -151,37 +137,6 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 	}()
 
-	// 额外出口：每条一个独立隧道 + 独立本地端口，启动即连（出口本身即为显式意图）。
-	var exits []ExitRuntime
-	for _, exit := range cfg.Exits {
-		if exit.Listen == "" || exit.Node == "" {
-			fmt.Printf("出口 %s 配置不完整（需要 node 与 listen），已跳过\n", exit.Name)
-			continue
-		}
-		exitAgent := agent.New(startCtx, cfg, client)
-		go exitAgent.Watchdog(runCtx, 30*time.Second)
-		if err := exitAgent.Connect(runCtx, exit.Node); err != nil {
-			fmt.Printf("出口 %s 连接 %s 失败: %v\n", exit.Name, exit.Node, err)
-			continue
-		}
-		ln, err := net.Listen("tcp", exit.Listen)
-		if err != nil {
-			fmt.Printf("出口 %s 监听 %s 失败: %v\n", exit.Name, exit.Listen, err)
-			continue
-		}
-		go func(a *agent.Agent) {
-			if err := proxy.New(a).Serve(ln); err != nil && runCtx.Err() == nil {
-				fmt.Printf("出口代理退出: %v\n", err)
-			}
-		}(exitAgent)
-		exits = append(exits, ExitRuntime{
-			Name:      exit.Name,
-			Node:      exit.Node,
-			ProxyAddr: exit.Listen,
-			Agent:     exitAgent,
-		})
-	}
-
 	panelListen := firstNonEmpty(opts.PanelListen, cfg.PanelListen, defaultPanelListen)
 	handler := panel.Handler(panel.Options{
 		Agent:     ag,
@@ -191,7 +146,6 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 		ProxyHost: proxyLn.Addr().(*net.TCPAddr).IP.String(),
 		ProxyPort: proxyLn.Addr().(*net.TCPAddr).Port,
 		PanelHost: panelListen,
-		Exits:     panelExits(exits),
 	})
 	server := &http.Server{Addr: panelListen, Handler: handler}
 	go func() {
@@ -201,7 +155,6 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	}()
 
 	return &Runtime{
-		Exits:     exits,
 		Agent:     ag,
 		Login:     login.New(client, cfg, ag),
 		ProxyAddr: proxyListen,
@@ -213,26 +166,6 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 }
 
 // Stop 关闭运行时。
-// panelExits 把出口信息转成面板视图，避免面板包依赖本包类型。
-func panelExits(exits []ExitRuntime) []panel.ExitInfo {
-	out := make([]panel.ExitInfo, 0, len(exits))
-	for _, exit := range exits {
-		state := exit.Agent.State()
-		stats := exit.Agent.Stats()
-		out = append(out, panel.ExitInfo{
-			Name:      exit.Name,
-			Node:      exit.Node,
-			ProxyAddr: exit.ProxyAddr,
-			Connected: state.Connected,
-			Address:   state.Address,
-			Handshake: stats.LastHandshake,
-			TxBytes:   stats.TxBytes,
-			RxBytes:   stats.RxBytes,
-		})
-	}
-	return out
-}
-
 func (r *Runtime) Stop(ctx context.Context) {
 	if r == nil {
 		return

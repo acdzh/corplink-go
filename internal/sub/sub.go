@@ -1,8 +1,7 @@
 // Package sub 生成 Clash 订阅。
 //
-// 设计：一个本地端口跑公司隧道，分流规则交给 Clash；
-// 如果配置了额外出口（config.Exits），每个出口也生成一个本地 socks 代理，
-// 并合成「日本出口」选择组，供 Antigravity 这类需要特定地区出口的流量使用。
+// 设计：只暴露一个本地端口、只下发一份配置，分流完全交给 Clash。
+// 服务端下发的分流网段与域名翻译成规则，命中走「节点选择」，其余直连。
 package sub
 
 import (
@@ -17,40 +16,17 @@ import (
 const (
 	// Title 是配置标题。
 	Title = "Corplink Go"
-	// ProxyName 是主（公司）隧道代理名。
+	// ProxyName 是代理名。
 	ProxyName = "CorpLink"
-	// GroupName 是主选择组名。
+	// GroupName 是选择组名。
 	GroupName = "节点选择"
-	// ExitGroup 是额外出口的选择组名。
-	ExitGroup = "日本出口"
 )
-
-// AntigravityDomains 是需要走额外出口的域名后缀。
-// 排在公司分流规则之前，命中优先。
-var AntigravityDomains = []string{
-	"antigravity.google",
-	"cloudcode-pa.googleapis.com",
-	"generativelanguage.googleapis.com",
-	"gemini.google.com",
-	"accounts.google.com",
-	"googleapis.com",
-	"gstatic.com",
-	"googleusercontent.com",
-}
-
-// ExitProxy 描述一个额外出口生成的代理。
-type ExitProxy struct {
-	// Name 是代理名（出口名）。
-	Name string
-	// Port 是本地端口。
-	Port int
-}
 
 // Options 是生成订阅所需的输入。
 type Options struct {
 	// Host 是本地监听地址。
 	Host string
-	// Port 是主隧道端口。
+	// Port 是本地代理端口。
 	Port int
 	// Username 与 Password 非空时写入认证。
 	Username string
@@ -59,13 +35,11 @@ type Options struct {
 	Routes []string
 	// Domains 是服务端下发的分流域名后缀。
 	Domains []string
-	// Exits 是额外出口。
-	Exits []ExitProxy
-	// DirectDomains 是必须直连的域名（本程序调用的控制面域名），
-	// 否则 fake-ip + 域名规则会把我们自己的 API 请求送回代理。
+	// DirectDomains 是必须直连的域名（本程序的控制面域名），
+	// 否则 fake-ip + 域名规则会把我们自己的请求送回代理。
 	DirectDomains []string
 	// NodeIPs 是节点公网 IP（含备用），必须直连：
-	// 否则 Clash 开 TUN/全局模式时会把这些流量再送回本代理，形成回环。
+	// 否则 Clash 在 TUN 模式下会把本程序的出站流量再送回代理，形成回环。
 	NodeIPs []string
 }
 
@@ -76,44 +50,16 @@ func Clash(opts Options) string {
 		host = "127.0.0.1"
 	}
 
-	socks := func(name string, port int) map[string]any {
-		proxy := map[string]any{
-			"name":   name,
-			"type":   "socks5",
-			"server": host,
-			"port":   port,
-			"udp":    true,
-		}
-		if opts.Username != "" {
-			proxy["username"] = opts.Username
-			proxy["password"] = opts.Password
-		}
-		return proxy
+	proxy := map[string]any{
+		"name":   ProxyName,
+		"type":   "socks5",
+		"server": host,
+		"port":   opts.Port,
+		"udp":    true,
 	}
-
-	proxies := []any{socks(ProxyName, opts.Port)}
-	exitNames := make([]string, 0, len(opts.Exits))
-	for _, exit := range opts.Exits {
-		if exit.Name == "" || exit.Port == 0 {
-			continue
-		}
-		exitNames = append(exitNames, exit.Name)
-		proxies = append(proxies, socks(exit.Name, exit.Port))
-	}
-
-	// 主选择组：客户端只渲染 proxy-groups，必须保留一个。
-	mainGroup := map[string]any{
-		"name":    GroupName,
-		"type":    "select",
-		"proxies": append([]string{ProxyName}, append(exitNames, "DIRECT")...),
-	}
-	groups := []any{mainGroup}
-	if len(exitNames) > 0 {
-		groups = append(groups, map[string]any{
-			"name":    ExitGroup,
-			"type":    "select",
-			"proxies": append(append([]string{}, exitNames...), ProxyName, "DIRECT"),
-		})
+	if opts.Username != "" {
+		proxy["username"] = opts.Username
+		proxy["password"] = opts.Password
 	}
 
 	dns := map[string]any{
@@ -124,8 +70,9 @@ func Clash(opts Options) string {
 		"fallback":      []string{"1.1.1.1", "8.8.8.8"},
 	}
 
-	rules := make([]string, 0, len(opts.Routes)+len(opts.Domains)+len(AntigravityDomains)+len(opts.NodeIPs)+2)
-	// 0b. 节点自身的公网 IP 也必须直连，否则 TUN/全局模式下会自己连自己。
+	rules := make([]string, 0, len(opts.Routes)+len(opts.Domains)+len(opts.NodeIPs)+len(opts.DirectDomains)+2)
+
+	// 0. 防回环：控制面域名与节点 IP 直连。
 	for _, domain := range opts.DirectDomains {
 		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
 		if domain == "" {
@@ -140,24 +87,17 @@ func Clash(opts Options) string {
 			continue
 		}
 		nodeSeen[ip] = true
-		kind := "IP-CIDR"
+		kind, suffix := "IP-CIDR", "/32"
 		if strings.Contains(ip, ":") {
-			kind = "IP-CIDR6"
-		}
-		suffix := "/32"
-		if kind == "IP-CIDR6" {
-			suffix = "/128"
+			kind, suffix = "IP-CIDR6", "/128"
 		}
 		if strings.Contains(ip, "/") {
 			suffix = ""
 		}
 		rules = append(rules, fmt.Sprintf("%s,%s%s,DIRECT,no-resolve", kind, ip, suffix))
 	}
-	if len(exitNames) > 0 {
-		for _, domain := range AntigravityDomains {
-			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, ExitGroup))
-		}
-	}
+
+	// 1. 公司分流：服务端下发的网段与域名。
 	seen := make(map[string]bool, len(opts.Routes)+len(opts.Domains))
 	for _, route := range opts.Routes {
 		route = normalizeCIDR(route)
@@ -169,7 +109,7 @@ func Clash(opts Options) string {
 		if strings.Contains(route, ":") {
 			kind = "IP-CIDR6"
 		}
-		rules = append(rules, fmt.Sprintf("%s,%s,%s,no-resolve", kind, route, ProxyName))
+		rules = append(rules, fmt.Sprintf("%s,%s,%s,no-resolve", kind, route, GroupName))
 	}
 	for _, domain := range opts.Domains {
 		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
@@ -182,11 +122,16 @@ func Clash(opts Options) string {
 	rules = append(rules, "MATCH,DIRECT")
 
 	doc := map[string]any{
-		"proxies": proxies,
-		"dns":     dns,
-		"rules":   rules,
+		"proxies": []any{proxy},
+		// 客户端（Clash Verge 等）只渲染 proxy-groups，必须保留一个。
+		"proxy-groups": []any{map[string]any{
+			"name":    GroupName,
+			"type":    "select",
+			"proxies": []string{ProxyName, "DIRECT"},
+		}},
+		"dns":   dns,
+		"rules": rules,
 	}
-	doc["proxy-groups"] = groups
 
 	var b strings.Builder
 	b.WriteString("# " + Title + "\n")
