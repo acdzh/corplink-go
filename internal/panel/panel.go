@@ -55,13 +55,8 @@ func Handler(opts Options) http.Handler {
 		})
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, _ *http.Request) {
-		type item struct {
-			Name     string `json:"name"`
-			IP       string `json:"ip"`
-			Protocol int    `json:"protocol_mode"`
-		}
 		nodes := opts.Agent.Nodes()
-		out := make([]item, 0, len(nodes))
+		out := make([]map[string]any, 0, len(nodes))
 		for _, n := range nodes {
 			name := n.EnName
 			if name == "" {
@@ -70,9 +65,29 @@ func Handler(opts Options) http.Handler {
 			if name == "" {
 				name = n.IP
 			}
-			out = append(out, item{Name: name, IP: n.IP, Protocol: n.ProtocolMode})
+			out = append(out, map[string]any{
+				"name":          name,
+				"raw_name":      n.Name,
+				"ip":            n.IP,
+				"internal_ip":   n.InternalIP,
+				"domain_name":   n.DomainName,
+				"tag":           n.TagName,
+				"type":          n.Type,
+				"icon":          n.Icon,
+				"protocol_mode": n.ProtocolMode,
+				"api_port":      n.APIPort,
+				"vpn_port":      n.VPNPort,
+			})
 		}
 		writeJSON(w, out)
+	})
+	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, opts.Agent.Stats())
+	})
+	mux.HandleFunc("/api/latency/all", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		writeJSON(w, opts.Agent.LatencyAll(ctx))
 	})
 	mux.HandleFunc("/api/connect", func(w http.ResponseWriter, r *http.Request) {
 		if err := opts.Agent.Connect(r.Context(), r.URL.Query().Get("node")); err != nil {

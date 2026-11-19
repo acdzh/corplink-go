@@ -158,6 +158,15 @@ func (c *Client) ClearCookies() {
 }
 
 // Do 发送一次接口请求并解析统一响应外壳。
+// acceptLanguage 返回 Accept-Language 头；官方客户端固定 zh-CN，
+// 与 query 里的 language=zh 是两套值，不能混用。
+func (c *Client) acceptLanguage() string {
+	if c.lang == "" || c.lang == "zh" {
+		return "zh-CN"
+	}
+	return c.lang
+}
+
 func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any) (*Envelope, error) {
 	u := *c.base
 	u.Path = strings.TrimRight(c.base.Path, "/") + ep.Path
@@ -187,7 +196,7 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		return nil, fmt.Errorf("构造请求: %w", err)
 	}
 	req.Header.Set("User-Agent", c.ua)
-	req.Header.Set("Accept-Language", c.lang)
+	req.Header.Set("Accept-Language", c.acceptLanguage())
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

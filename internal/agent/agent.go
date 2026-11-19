@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +29,24 @@ const (
 	// latencyTimeout 是测节点延迟的超时。
 	latencyTimeout = 6 * time.Second
 )
+
+// Stats 是隧道流量与握手状态。
+type Stats struct {
+	// Connected 表示隧道是否已建立。
+	Connected bool `json:"connected"`
+	// Node 是当前节点名。
+	Node string `json:"node"`
+	// Address 是隧道内地址。
+	Address string `json:"address"`
+	// TxBytes 是发出的字节数。
+	TxBytes int64 `json:"tx_bytes"`
+	// RxBytes 是收到的字节数。
+	RxBytes int64 `json:"rx_bytes"`
+	// LastHandshake 是最近一次握手时间戳。
+	LastHandshake int64 `json:"last_handshake"`
+	// UptimeSeconds 是连接持续秒数。
+	UptimeSeconds int64 `json:"uptime_seconds"`
+}
 
 // State 是当前活动连接的状态快照。
 type State struct {
@@ -243,6 +263,89 @@ func (a *Agent) Keepalive(ctx context.Context, interval time.Duration) {
 				_ = a.client.SaveCookies(a.cfg.SessionPath())
 			}
 		}
+	}
+}
+
+// Stats 返回当前隧道的流量与握手状态。
+func (a *Agent) Stats() Stats {
+	a.mu.RLock()
+	cur := a.current
+	a.mu.RUnlock()
+	if cur == nil {
+		return Stats{}
+	}
+	out := Stats{
+		Connected:     true,
+		Node:          nodeName(cur.node),
+		Address:       cur.addr,
+		UptimeSeconds: int64(time.Since(cur.since).Seconds()),
+	}
+	raw, err := cur.tun.Stats()
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "tx_bytes":
+			out.TxBytes, _ = strconv.ParseInt(value, 10, 64)
+		case "rx_bytes":
+			out.RxBytes, _ = strconv.ParseInt(value, 10, 64)
+		case "last_handshake_time_sec":
+			out.LastHandshake, _ = strconv.ParseInt(value, 10, 64)
+		}
+	}
+	return out
+}
+
+// LatencyAll 并发测所有节点的 API 端口建连耗时（毫秒），失败为 -1。
+func (a *Agent) LatencyAll(ctx context.Context) map[string]int64 {
+	nodes := a.Nodes()
+	out := make(map[string]int64, len(nodes))
+	type result struct {
+		name string
+		ms   int64
+	}
+	results := make(chan result, len(nodes))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, node := range nodes {
+		node := node
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ms, err := a.Latency(ctx, nodeName(node))
+			if err != nil {
+				ms = -1
+			}
+			results <- result{name: nodeName(node), ms: ms}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		out[r.name] = r.ms
+	}
+	return out
+}
+
+// Warmup 在登录成功后按官方客户端的顺序拉一批基础配置，
+// 既补齐本地能力，也让请求序列更接近真实客户端。
+func (a *Agent) Warmup(ctx context.Context) {
+	for _, ep := range []api.Endpoint{
+		api.EndpointInfoMe,
+		api.EndpointTenantConfig,
+		api.EndpointSecurityCfg,
+		api.EndpointApplication,
+	} {
+		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		_, _ = a.client.Do(probeCtx, ep, nil, nil)
+		cancel()
 	}
 }
 

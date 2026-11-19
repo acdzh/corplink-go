@@ -9,37 +9,65 @@
   * { box-sizing: border-box; }
   body { margin:0; padding:24px; font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
          background:#0f1115; color:#e5e7eb; }
-  .card { max-width:760px; margin:0 auto 16px; background:#171a21; border:1px solid #262b36;
+  .card { max-width:900px; margin:0 auto 16px; background:#171a21; border:1px solid #262b36;
           border-radius:12px; padding:18px; }
-  h1 { font-size:16px; margin:0 0 14px; font-weight:600; }
+  h1 { font-size:15px; margin:0 0 14px; font-weight:600; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .dot { width:9px; height:9px; border-radius:50%; background:#6b7280; }
   .dot.on { background:#22c55e; }
-  button { background:#2563eb; border:0; color:#fff; padding:8px 14px; border-radius:8px;
+  button { background:#2563eb; border:0; color:#fff; padding:7px 13px; border-radius:8px;
            font-size:13px; cursor:pointer; }
   button.ghost { background:#374151; }
   button:disabled { opacity:.45; cursor:not-allowed; }
   select, input { background:#0f1115; color:#e5e7eb; border:1px solid #333a48; border-radius:8px;
-                  padding:8px; font-size:13px; }
+                  padding:7px; font-size:13px; }
   .muted { color:#9ca3af; font-size:12px; }
   code { background:#0f1115; padding:3px 8px; border-radius:6px; font-size:12px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  td { padding:6px 4px; border-bottom:1px solid #232833; }
+  th { text-align:left; color:#9ca3af; font-weight:400; font-size:12px; padding:6px 4px;
+       border-bottom:1px solid #262b36; }
+  td { padding:6px 4px; border-bottom:1px solid #1e232d; }
   tr:last-child td { border-bottom:0; }
+  .flag { width:22px; display:inline-block; }
+  .metric { font-size:22px; font-family:ui-monospace,monospace; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 </style>
 </head>
 <body>
+
 <div class="card">
-  <h1>连接状态</h1>
+  <h1>连接</h1>
   <div class="row"><span class="dot" id="dot"></span><span id="state">未连接</span></div>
-  <div class="muted" id="detail" style="margin-top:10px"></div>
-  <div class="row" style="margin-top:14px">
+  <div class="muted" id="detail" style="margin-top:8px"></div>
+  <div class="row" style="margin-top:12px">
     <select id="node" style="min-width:240px"></select>
     <button id="btnConnect">连接</button>
     <button class="ghost" id="btnDisconnect">断开</button>
-    <button class="ghost" id="btnLatency">测延迟</button>
     <button class="ghost" id="btnRefresh">刷新节点</button>
   </div>
+</div>
+
+<div class="card">
+  <h1>流量</h1>
+  <div class="grid">
+    <div><div class="muted">上行</div><div class="metric" id="tx">-</div></div>
+    <div><div class="muted">下行</div><div class="metric" id="rx">-</div></div>
+    <div><div class="muted">上行速率</div><div class="metric" id="txRate">-</div></div>
+    <div><div class="muted">下行速率</div><div class="metric" id="rxRate">-</div></div>
+  </div>
+  <div class="muted" id="connInfo" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
+  <h1>节点 <span class="muted" id="nodeCount"></span></h1>
+  <div class="row" style="margin-bottom:10px">
+    <button class="ghost" id="btnLatencyAll">全部测延迟</button>
+    <span class="muted" id="latencyTip"></span>
+  </div>
+  <table>
+    <thead><tr><th></th><th>节点</th><th>标签</th><th>协议</th><th>延迟</th><th>内网地址</th><th></th></tr></thead>
+    <tbody id="nodeTable"></tbody>
+  </table>
 </div>
 
 <div class="card">
@@ -51,7 +79,7 @@
     <button class="ghost" id="btnLogout">退出登录</button>
   </div>
   <div id="loginStep2" style="display:none;margin-top:12px">
-    <input id="callback" placeholder="授权完成后，把浏览器地址栏的 corplink://... 或 device-callback 地址粘到这里" style="width:100%">
+    <input id="callback" placeholder="授权完成后把浏览器地址栏的 corplink://... 或 device-callback 地址粘到这里" style="width:100%">
     <div class="row" style="margin-top:8px"><button id="btnCallback">提交回调</button></div>
   </div>
   <div id="loginStep3" style="display:none;margin-top:12px">
@@ -64,31 +92,30 @@
 </div>
 
 <div class="card">
-  <h1>设置</h1>
-  <div class="row" style="gap:14px">
-    <label class="muted">代理监听<input id="setProxy" style="display:block;width:200px;margin-top:4px"></label>
-    <label class="muted">面板监听<input id="setPanel" style="display:block;width:200px;margin-top:4px"></label>
-    <label class="muted">自动连接节点<input id="setAutoNode" placeholder="留空不自动连" style="display:block;width:200px;margin-top:4px"></label>
-  </div>
-  <div class="row" style="gap:14px;margin-top:12px">
-    <label class="muted">保活间隔(秒)<input id="setKeepalive" type="number" style="display:block;width:140px;margin-top:4px"></label>
-    <label class="muted">代理用户名<input id="setUser" style="display:block;width:160px;margin-top:4px"></label>
-    <label class="muted">代理密码<input id="setPass" type="password" style="display:block;width:160px;margin-top:4px"></label>
-    <label class="muted">日志级别<input id="setLog" style="display:block;width:120px;margin-top:4px"></label>
-  </div>
-  <div class="row" style="margin-top:14px">
-    <button id="btnSaveSettings">保存设置</button>
-    <span class="muted" id="settingsTip"></span>
-  </div>
-</div>
-
-<div class="card">
   <h1>二次验证 (TOTP)</h1>
   <div class="row">
     <span id="totpCode" style="font-size:26px;font-family:ui-monospace,monospace;letter-spacing:3px">------</span>
     <span class="muted" id="totpTip">读取中…</span>
   </div>
-  <div class="muted" style="margin-top:8px">登录时若服务端要求 2FA，可直接用这个码；剩余秒数实时刷新。</div>
+</div>
+
+<div class="card">
+  <h1>设置</h1>
+  <div class="row" style="gap:14px">
+    <label class="muted">代理监听<input id="setProxy" style="display:block;width:190px;margin-top:4px"></label>
+    <label class="muted">面板监听<input id="setPanel" style="display:block;width:190px;margin-top:4px"></label>
+    <label class="muted">自动连接节点<input id="setAutoNode" placeholder="留空不自动连" style="display:block;width:190px;margin-top:4px"></label>
+  </div>
+  <div class="row" style="gap:14px;margin-top:12px">
+    <label class="muted">保活(秒)<input id="setKeepalive" type="number" style="display:block;width:130px;margin-top:4px"></label>
+    <label class="muted">代理用户名<input id="setUser" style="display:block;width:150px;margin-top:4px"></label>
+    <label class="muted">代理密码<input id="setPass" type="password" style="display:block;width:150px;margin-top:4px"></label>
+    <label class="muted">日志级别<input id="setLog" style="display:block;width:110px;margin-top:4px"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="btnSaveSettings">保存设置</button>
+    <span class="muted" id="settingsTip"></span>
+  </div>
 </div>
 
 <div class="card">
@@ -100,14 +127,37 @@
   </div>
 </div>
 
-<div class="card">
-  <h1>节点</h1>
-  <div class="muted" id="nodeCount"></div>
-  <table id="nodeTable"></table>
-</div>
+<p class="muted" style="text-align:center;margin:24px 0 8px">3710 · 13140 · 一生プロキシしてくれる？</p>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const FLAGS = {
+  CNTW: '🇨🇳', CNHK: '🇭🇰', CN: '🇨🇳', HK: '🇭🇰', TW: '🇹🇼', JP: '🇯🇵', SG: '🇸🇬',
+  US: '🇺🇸', IRL: '🇮🇪', IND: '🇮🇳', BR: '🇧🇷', KR: '🇰🇷', DE: '🇩🇪', UK: '🇬🇧',
+  AU: '🇦🇺', CA: '🇨🇦', FR: '🇫🇷', NL: '🇳🇱', MY: '🇲🇾', TH: '🇹🇭', VN: '🇻🇳',
+};
+let nodes = [];
+let selected = '';
+let latency = {};
+let lastSample = null;
+
+function flagOf(name) {
+  const key = Object.keys(FLAGS).sort((a, b) => b.length - a.length)
+    .find(k => name.toUpperCase().startsWith(k));
+  return key ? FLAGS[key] : '🌐';
+}
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+function fmtDuration(sec) {
+  if (!sec) return '-';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? h + 'h ' : '') + (m ? m + 'm ' : '') + s + 's';
+}
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -123,20 +173,65 @@ async function refreshStatus() {
   $('loginState').textContent = resp.logged_in
     ? '已登录' + (resp.mfa_pending ? '（等待二次验证）' : '')
     : '未登录 / 会话已失效';
-  $('detail').textContent = resp.error;
+  $('detail').textContent = resp.error
     ? ('未登录或会话过期：' + resp.error)
     : (s.connected
-      ? ('隧道 ' + s.address + ' · 路由 ' + s.routes + ' 条 · DNS ' + (s.dns || []).join(', ') + ' · 起始 ' + s.since)
+      ? ('隧道 ' + s.address + ' · 路由 ' + s.routes + ' 条 · DNS ' + (s.dns || []).join(', '))
       : '未建立隧道，代理端口会拒绝所有连接');
+  if (s.node && !selected) { selected = s.node; }
+}
+
+async function refreshStats() {
+  const st = await api('/api/stats');
+  if (!st.connected) {
+    $('tx').textContent = '-'; $('rx').textContent = '-';
+    $('txRate').textContent = '-'; $('rxRate').textContent = '-';
+    $('connInfo').textContent = '';
+    lastSample = null;
+    return;
+  }
+  $('tx').textContent = fmtBytes(st.tx_bytes);
+  $('rx').textContent = fmtBytes(st.rx_bytes);
+  const now = Date.now();
+  if (lastSample) {
+    const dt = (now - lastSample.t) / 1000;
+    if (dt > 0.5) {
+      $('txRate').textContent = fmtBytes(Math.max(0, (st.tx_bytes - lastSample.tx) / dt)) + '/s';
+      $('rxRate').textContent = fmtBytes(Math.max(0, (st.rx_bytes - lastSample.rx) / dt)) + '/s';
+    }
+  }
+  lastSample = { t: now, tx: st.tx_bytes, rx: st.rx_bytes };
+  $('connInfo').textContent = '隧道 ' + st.address + ' · 在线 ' + fmtDuration(st.uptime_seconds)
+    + (st.last_handshake ? ' · 最近握手 ' + new Date(st.last_handshake * 1000).toLocaleTimeString() : '');
+}
+
+function renderNodes() {
+  const sel = $('node');
+  sel.innerHTML = nodes.map(n =>
+    '<option value="' + n.name + '">' + flagOf(n.name) + ' ' + n.name + '</option>').join('');
+  if (selected) sel.value = selected;
+  $('nodeCount').textContent = '共 ' + nodes.length + ' 个';
+  $('nodeTable').innerHTML = nodes.map(n => {
+    const ms = latency[n.name];
+    const lat = ms === undefined ? '<span class="muted">-</span>'
+      : (ms < 0 ? '<span class="muted">超时</span>' : ms + ' ms');
+    const proto = n.protocol_mode === 1 ? 'TCP' : 'UDP';
+    const tag = n.tag ? '<span class="muted">' + n.tag + '</span>' : '';
+    return '<tr><td class="flag">' + flagOf(n.name) + '</td><td>' + n.name +
+      (n.domain_name ? ' <span class="muted">' + n.domain_name + '</span>' : '') + '</td><td>' + tag +
+      '</td><td class="muted">' + proto + '</td><td>' + lat + '</td><td class="muted">' +
+      (n.internal_ip || '') + '</td><td><button class="ghost" onclick="pickNode(\'' + n.name + '\')">选</button></td></tr>';
+  }).join('');
 }
 
 async function loadNodes() {
-  const nodes = await api('/api/nodes');
-  $('nodeCount').textContent = '共 ' + nodes.length + ' 个节点';
-  $('node').innerHTML = nodes.map(n =>
-    '<option value="' + n.name + '">' + n.name + ' (' + n.ip + ')</option>').join('');
-  $('nodeTable').innerHTML = nodes.slice(0, 50).map(n =>
-    '<tr><td>' + n.name + '</td><td class="muted">' + n.ip + '</td><td class="muted">protocol ' + n.protocol_mode + '</td></tr>').join('');
+  nodes = await api('/api/nodes');
+  renderNodes();
+}
+
+function pickNode(name) {
+  selected = name;
+  $('node').value = name;
 }
 
 async function connect() {
@@ -144,6 +239,7 @@ async function connect() {
   $('btnConnect').disabled = true;
   try {
     await api('/api/connect?node=' + encodeURIComponent(name), { method: 'POST' });
+    selected = name;
   } finally {
     $('btnConnect').disabled = false;
     refreshStatus();
@@ -155,46 +251,35 @@ async function disconnect() {
   refreshStatus();
 }
 
-async function latency() {
-  const name = $('node').value;
-  const r = await api('/api/latency?node=' + encodeURIComponent(name));
-  $('detail').textContent = name + ' API 延迟 ' + r.ms + 'ms';
+async function latencyAll() {
+  $('btnLatencyAll').disabled = true;
+  $('latencyTip').textContent = '测试中…';
+  try {
+    latency = await api('/api/latency/all');
+    renderNodes();
+    $('latencyTip').textContent = '完成';
+  } catch (e) {
+    $('latencyTip').textContent = '失败：' + e.message;
+  } finally {
+    $('btnLatencyAll').disabled = false;
+  }
 }
 
 async function refreshNodes() {
   const r = await api('/api/refresh', { method: 'POST' });
   await loadNodes();
-loadSettings();
-refreshTotp();
-setInterval(refreshTotp, 1000);
-  $('nodeCount').textContent = '共 ' + r.nodes + ' 个节点（已刷新）';
+  $('latencyTip').textContent = '已刷新，共 ' + r.nodes + ' 个节点';
 }
 
 async function refreshTotp() {
   try {
     const t = await api('/api/totp');
-    if (!t.has_secret) {
-      $('totpCode').textContent = '------';
-      $('totpTip').textContent = '未保存 TOTP secret（登录一次即可获取）';
-      return;
-    }
-    $('totpCode').textContent = t.code;
-    $('totpTip').textContent = '剩余 ' + t.remaining + 's';
+    $('totpCode').textContent = t.has_secret ? t.code : '------';
+    $('totpTip').textContent = t.has_secret ? ('剩余 ' + t.remaining + 's') : '未保存 TOTP secret';
   } catch (e) {
     $('totpTip').textContent = '读取失败';
   }
 }
-
-async function loadSub() {
-  const r = await api('/api/sub');
-  $('sub').textContent = r.url;
-}
-
-$('btnConnect').onclick = connect;
-$('btnDisconnect').onclick = disconnect;
-$('btnLatency').onclick = latency;
-$('btnRefresh').onclick = refreshNodes;
-$('btnCopy').onclick = () => navigator.clipboard.writeText($('sub').textContent);
 
 async function loadSettings() {
   const s = await api('/api/settings');
@@ -208,33 +293,33 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  const body = {
-    proxy_listen: $('setProxy').value.trim(),
-    panel_listen: $('setPanel').value.trim(),
-    auto_node: $('setAutoNode').value.trim(),
-    keepalive_seconds: parseInt($('setKeepalive').value || '0', 10),
-    socks5_username: $('setUser').value.trim(),
-    socks5_password: $('setPass').value,
-    log_level: $('setLog').value.trim(),
-  };
   const r = await api('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      proxy_listen: $('setProxy').value.trim(),
+      panel_listen: $('setPanel').value.trim(),
+      auto_node: $('setAutoNode').value.trim(),
+      keepalive_seconds: parseInt($('setKeepalive').value || '0', 10),
+      socks5_username: $('setUser').value.trim(),
+      socks5_password: $('setPass').value,
+      log_level: $('setLog').value.trim(),
+    }),
   });
   $('settingsTip').textContent = r.restart_required && r.restart_required.length
     ? '已保存，需重启生效：' + r.restart_required.join(', ')
     : '已保存并即时生效';
 }
 
-$('btnSaveSettings').onclick = saveSettings;
+async function loadSub() {
+  const r = await api('/api/sub');
+  $('sub').textContent = r.url;
+}
 
 async function startLogin() {
   const r = await api('/api/login/start', { method: 'POST' });
   const link = $('loginLink');
-  link.href = r.url;
-  link.style.display = 'inline';
-  link.textContent = '打开授权页 ↗';
+  link.href = r.url; link.style.display = 'inline'; link.textContent = '打开授权页 ↗';
   $('loginStep2').style.display = 'block';
   $('loginTip').textContent = '先点「打开授权页」完成 SSO，再把回调地址粘回来。';
 }
@@ -244,8 +329,7 @@ async function submitCallback() {
   if (!callback) return;
   try {
     const r = await api('/api/login/callback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ callback }),
     });
     if (r.mfa_required) {
@@ -255,47 +339,49 @@ async function submitCallback() {
     }
     $('loginTip').textContent = '登录成功，节点 ' + (r.nodes || 0) + ' 个';
     $('loginStep2').style.display = 'none';
-    $('loginStep3').style.display = 'none';
-    loadNodes();
-    refreshStatus();
-  } catch (e) {
-    $('loginTip').textContent = '回调失败：' + e.message;
-  }
+    loadNodes(); refreshStatus();
+  } catch (e) { $('loginTip').textContent = '回调失败：' + e.message; }
 }
 
 async function submitMfa() {
   try {
     const r = await api('/api/login/mfa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: $('mfaCode').value.trim() }),
     });
     $('loginTip').textContent = '登录成功，节点 ' + (r.nodes || 0) + ' 个';
-    $('loginStep2').style.display = 'none';
     $('loginStep3').style.display = 'none';
-    loadNodes();
-    refreshStatus();
-  } catch (e) {
-    $('loginTip').textContent = '验证失败：' + e.message;
-  }
+    loadNodes(); refreshStatus();
+  } catch (e) { $('loginTip').textContent = '验证失败：' + e.message; }
 }
 
 async function logout() {
   await api('/api/logout', { method: 'POST' });
   $('loginTip').textContent = '已退出登录';
-  loadNodes();
-  refreshStatus();
+  loadNodes(); refreshStatus();
 }
 
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = disconnect;
+$('btnRefresh').onclick = refreshNodes;
+$('btnLatencyAll').onclick = latencyAll;
+$('btnSaveSettings').onclick = saveSettings;
+$('btnCopy').onclick = () => navigator.clipboard.writeText($('sub').textContent);
 $('btnLogin').onclick = startLogin;
 $('btnCallback').onclick = submitCallback;
 $('btnMfa').onclick = submitMfa;
 $('btnLogout').onclick = logout;
+$('node').onchange = (e) => { selected = e.target.value; };
 
 loadNodes();
+loadSettings();
 loadSub();
 refreshStatus();
+refreshStats();
+refreshTotp();
 setInterval(refreshStatus, 3000);
+setInterval(refreshStats, 2000);
+setInterval(refreshTotp, 1000);
 </script>
 </body>
 </html>

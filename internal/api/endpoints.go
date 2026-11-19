@@ -36,6 +36,9 @@ var (
 	EndpointTPSToken      = Endpoint{Path: "/api/tpslogin/token/check"}
 	EndpointTPSDevice     = Endpoint{Path: "/api/tpslogin/device/callback"}
 	EndpointOTP           = Endpoint{Path: "/api/v2/p/otp"}
+	EndpointTenantConfig  = Endpoint{Path: "/api/tenant/config"}
+	EndpointApplication   = Endpoint{Path: "/api/application/list"}
+	EndpointSecurityCfg   = Endpoint{Path: "/api/security/config"}
 	EndpointInfoMe        = Endpoint{Path: "/api/info/me"}
 	EndpointMFAType       = Endpoint{Path: "/api/mfa/type"}
 	EndpointMFACodeSend   = Endpoint{Path: "/api/mfa/code/send"}

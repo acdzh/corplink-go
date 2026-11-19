@@ -106,14 +106,20 @@ type MfaType struct {
 
 // VpnInfo 是 /api/vpn/list 返回的单个节点。
 type VpnInfo struct {
-	IP           string `json:"ip"`
-	APIPort      int    `json:"api_port"`
-	VPNPort      int    `json:"vpn_port"`
-	ProtocolMode int    `json:"protocol_mode"`
-	Name         string `json:"name"`
-	EnName       string `json:"en_name"`
-	ID           int    `json:"id"`
-	Timeout      int    `json:"timeout"`
+	ID           int      `json:"id"`
+	Type         string   `json:"type"`
+	Name         string   `json:"name"`
+	EnName       string   `json:"en_name"`
+	TagName      string   `json:"tag_name"`
+	Icon         string   `json:"icon"`
+	IP           string   `json:"ip"`
+	InternalIP   string   `json:"internal_ip"`
+	DomainName   string   `json:"domain_name"`
+	BackupIPs    []string `json:"backup_ips"`
+	APIPort      int      `json:"api_port"`
+	VPNPort      int      `json:"vpn_port"`
+	ProtocolMode int      `json:"protocol_mode"`
+	Timeout      int      `json:"timeout"`
 }
 
 // WgSetting 是隧道附加配置。

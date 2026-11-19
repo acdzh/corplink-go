@@ -147,6 +147,7 @@ func (s *Service) finish(ctx context.Context) (map[string]any, error) {
 	s.mu.Lock()
 	s.current = nil
 	s.mu.Unlock()
+	s.agent.Warmup(ctx)
 	if err := s.agent.RefreshNodes(ctx); err != nil {
 		return map[string]any{"logged_in": true, "otp_saved": otpSaved, "warning": err.Error()}, nil
 	}
