@@ -126,14 +126,11 @@ func Handler(opts Options) http.Handler {
 		writeJSON(w, map[string]int{"nodes": len(opts.Agent.Nodes())})
 	})
 	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, _ *http.Request) {
-		body := sub.Single(sub.SingleOptions{
-			Name:     "CORPLINK",
+		body := sub.Clash(sub.Options{
 			Host:     opts.ProxyHost,
 			Port:     opts.ProxyPort,
 			Username: opts.Config.SocksUser,
 			Password: opts.Config.SocksPass,
-			Routes:   opts.Agent.Routes(),
-			Domains:  opts.Agent.Domains(),
 		})
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		_, _ = w.Write([]byte(body))
