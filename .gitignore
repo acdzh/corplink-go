@@ -1,0 +1,12 @@
+# 构建产物
+/bin/
+/dist/
+
+# 本地配置与凭据（含 cookie、私钥、activate_code）
+/config.json
+/corplink_cookies.json
+*.log
+*.mitm
+
+# macOS
+.DS_Store
