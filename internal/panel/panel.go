@@ -126,6 +126,7 @@ func Handler(opts Options) http.Handler {
 			Password: opts.Config.SocksPass,
 			Routes:   opts.Agent.Routes(),
 			Domains:  opts.Agent.Domains(),
+			Full:     opts.Config.RouteMode == "full",
 		})
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		_, _ = w.Write([]byte(body))
@@ -260,20 +261,25 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // settingsPayload 是面板提交的配置字段。
+// settingsPayload 是面板提交的配置字段。
+//
+// 字段用指针：区分"没提交"和"提交了空值"，避免部分更新把其他项清空。
 type settingsPayload struct {
 	// ProxyListen 是混合代理监听地址。
-	ProxyListen string `json:"proxy_listen"`
+	ProxyListen *string `json:"proxy_listen"`
 	// PanelListen 是控制面板监听地址。
-	PanelListen string `json:"panel_listen"`
+	PanelListen *string `json:"panel_listen"`
 	// AutoNode 是启动时自动连接的节点。
-	AutoNode string `json:"auto_node"`
+	AutoNode *string `json:"auto_node"`
 	// KeepaliveSeconds 是会话保活间隔（秒）。
-	KeepaliveSeconds int `json:"keepalive_seconds"`
+	KeepaliveSeconds *int `json:"keepalive_seconds"`
 	// SocksUser 与 SocksPass 是代理认证。
-	SocksUser string `json:"socks5_username"`
-	SocksPass string `json:"socks5_password"`
+	SocksUser *string `json:"socks5_username"`
+	SocksPass *string `json:"socks5_password"`
 	// LogLevel 是日志级别。
-	LogLevel string `json:"log_level"`
+	LogLevel *string `json:"log_level"`
+	// RouteMode 是分流模式 split/full。
+	RouteMode *string `json:"route_mode"`
 }
 
 // currentSettings 返回可编辑的配置快照。
@@ -287,52 +293,86 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		panelListen = "127.0.0.1:13140"
 	}
 	return settingsPayload{
-		ProxyListen:      proxyListen,
-		PanelListen:      panelListen,
-		AutoNode:         cfg.AutoNode,
-		KeepaliveSeconds: cfg.KeepaliveSeconds,
-		SocksUser:        cfg.SocksUser,
-		SocksPass:        cfg.SocksPass,
-		LogLevel:         cfg.LogLevel,
+		ProxyListen:      &proxyListen,
+		PanelListen:      &panelListen,
+		AutoNode:         &cfg.AutoNode,
+		KeepaliveSeconds: &cfg.KeepaliveSeconds,
+		SocksUser:        &cfg.SocksUser,
+		SocksPass:        &cfg.SocksPass,
+		LogLevel:         &cfg.LogLevel,
+		RouteMode:        ptr(routeModeOf(cfg)),
 	}
+}
+
+// ptr 返回字符串指针，便于构造部分更新字段。
+func ptr(v string) *string { return &v }
+
+// routeModeOf 返回生效的分流模式，缺省 split。
+func routeModeOf(cfg *config.Config) string {
+	if cfg.RouteMode == "full" {
+		return "full"
+	}
+	return "split"
 }
 
 // applySettings 校验并写入配置，返回需要重启才生效的字段名。
 func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 	restart := make([]string, 0, 4)
-	if v := strings.TrimSpace(in.ProxyListen); v != "" && v != cfg.SocksListen {
-		if _, _, err := net.SplitHostPort(v); err != nil {
-			return nil, fmt.Errorf("代理监听地址非法: %w", err)
+	if in.ProxyListen != nil {
+		v := strings.TrimSpace(*in.ProxyListen)
+		if v != "" && v != cfg.SocksListen {
+			if _, _, err := net.SplitHostPort(v); err != nil {
+				return nil, fmt.Errorf("代理监听地址非法: %w", err)
+			}
+			cfg.SocksListen = v
+			restart = append(restart, "proxy_listen")
 		}
-		cfg.SocksListen = v
-		restart = append(restart, "proxy_listen")
 	}
-	if v := strings.TrimSpace(in.PanelListen); v != "" && v != cfg.PanelListen {
-		if _, _, err := net.SplitHostPort(v); err != nil {
-			return nil, fmt.Errorf("面板监听地址非法: %w", err)
+	if in.PanelListen != nil {
+		v := strings.TrimSpace(*in.PanelListen)
+		if v != "" && v != cfg.PanelListen {
+			if _, _, err := net.SplitHostPort(v); err != nil {
+				return nil, fmt.Errorf("面板监听地址非法: %w", err)
+			}
+			cfg.PanelListen = v
+			restart = append(restart, "panel_listen")
 		}
-		cfg.PanelListen = v
-		restart = append(restart, "panel_listen")
 	}
-	if in.AutoNode != cfg.AutoNode {
-		cfg.AutoNode = strings.TrimSpace(in.AutoNode)
-		restart = append(restart, "auto_node")
+	if in.AutoNode != nil {
+		v := strings.TrimSpace(*in.AutoNode)
+		if v != cfg.AutoNode {
+			cfg.AutoNode = v
+			restart = append(restart, "auto_node")
+		}
 	}
-	if in.KeepaliveSeconds != cfg.KeepaliveSeconds {
-		if in.KeepaliveSeconds < 0 {
+	if in.KeepaliveSeconds != nil && *in.KeepaliveSeconds != cfg.KeepaliveSeconds {
+		if *in.KeepaliveSeconds < 0 {
 			return nil, fmt.Errorf("保活间隔不能为负")
 		}
-		cfg.KeepaliveSeconds = in.KeepaliveSeconds
+		cfg.KeepaliveSeconds = *in.KeepaliveSeconds
 		restart = append(restart, "keepalive_seconds")
 	}
-	if in.SocksUser != cfg.SocksUser || in.SocksPass != cfg.SocksPass {
-		cfg.SocksUser = in.SocksUser
-		cfg.SocksPass = in.SocksPass
+	if in.SocksUser != nil && in.SocksPass != nil && (*in.SocksUser != cfg.SocksUser || *in.SocksPass != cfg.SocksPass) {
+		cfg.SocksUser = *in.SocksUser
+		cfg.SocksPass = *in.SocksPass
 		restart = append(restart, "socks5_auth")
 	}
-	if v := strings.TrimSpace(in.LogLevel); v != "" && v != cfg.LogLevel {
-		cfg.LogLevel = v
-		restart = append(restart, "log_level")
+	if in.LogLevel != nil {
+		v := strings.TrimSpace(*in.LogLevel)
+		if v != "" && v != cfg.LogLevel {
+			cfg.LogLevel = v
+			restart = append(restart, "log_level")
+		}
+	}
+	if in.RouteMode != nil {
+		mode := strings.TrimSpace(*in.RouteMode)
+		if mode != "" && mode != cfg.RouteMode {
+			if mode != "split" && mode != "full" {
+				return nil, fmt.Errorf("分流模式只能是 split 或 full")
+			}
+			cfg.RouteMode = mode
+			restart = append(restart, "route_mode")
+		}
 	}
 	return restart, nil
 }

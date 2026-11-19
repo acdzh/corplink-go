@@ -430,13 +430,18 @@ func (a *Agent) build(ctx context.Context, node api.VpnInfo) (*active, error) {
 	if node.ProtocolMode == 1 {
 		protocol = tunnel.ProtocolTCP
 	}
+	// 分流模式决定隧道允许的网段：split 只放内网，full 放全量。
+	allowed := info.Setting.VpnRouteSplit
+	if a.cfg.RouteMode == "full" {
+		allowed = info.Setting.VpnRouteFull
+	}
 	tun, err := tunnel.Start(tunnel.Config{
 		PrivateKey: pair.PrivateKey,
 		PeerKey:    info.PublicKey,
 		Endpoint:   fmt.Sprintf("%s:%d", node.IP, node.VPNPort),
 		Addresses:  addresses,
 		DNS:        dns,
-		AllowedIPs: info.Setting.VpnRouteSplit,
+		AllowedIPs: allowed,
 		MTU:        int(info.Setting.VpnMTU),
 		Protocol:   protocol,
 	})
