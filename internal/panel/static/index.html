@@ -123,14 +123,8 @@
   <h1>订阅</h1>
   <div class="muted">填进 Clash Verge 即可；切换节点只影响这一条链路。</div>
   <div class="row" style="margin-top:10px">
-    <span class="muted">极速（按服务端分流规则）</span>
-    <code id="subSplit" style="flex:1;overflow:auto;white-space:nowrap;padding:8px"></code>
-    <button class="ghost" onclick="navigator.clipboard.writeText(document.getElementById('subSplit').textContent)">复制</button>
-  </div>
-  <div class="row" style="margin-top:8px">
-    <span class="muted">全局（所有流量走代理）</span>
-    <code id="subGlobal" style="flex:1;overflow:auto;white-space:nowrap;padding:8px"></code>
-    <button class="ghost" onclick="navigator.clipboard.writeText(document.getElementById('subGlobal').textContent)">复制</button>
+    <code id="subUrl" style="flex:1;overflow:auto;white-space:nowrap;padding:8px"></code>
+    <button class="ghost" id="btnCopySub">复制</button>
   </div>
 </div>
 
@@ -337,9 +331,9 @@ async function saveSettings() {
 
 async function loadSub() {
   const r = await api('/api/sub');
-  $('subSplit').textContent = r.split;
-  $('subGlobal').textContent = r.global;
+  $('subUrl').textContent = r.url;
 }
+$('btnCopySub').onclick = () => navigator.clipboard.writeText($('subUrl').textContent);
 
 async function startLogin() {
   const r = await api('/api/login/start', { method: 'POST' });

@@ -1,11 +1,7 @@
-// Package sub 生成 Clash 订阅配置。
+// Package sub 生成 Clash 订阅。
 //
-// 提供两份配置，对应官方客户端的两种模式：
-//
-//	极速（split）  —— 使用服务端下发的分流路由与域名规则，其余直连
-//	全局（global） —— 所有流量都走代理
-//
-// 选哪个节点由我们自己的面板决定，Clash 侧只负责按规则转发。
+// 设计要点：只暴露一个本地端口、只下发一份配置；分流完全交给 Clash ——
+// 把服务端 /vpn/conn 返回的分流网段与域名后缀翻译成规则，命中走代理，其余直连。
 package sub
 
 import (
@@ -19,7 +15,6 @@ const (
 	// Title 是配置标题。
 	Title = "Corplink Go"
 	// ProxyName 是唯一代理名。
-	// 不要用「极速」：那是官方客户端的模式名（表示按分流规则走），不是节点名。
 	ProxyName = "CorpLink"
 	// GroupName 是唯一选择组名。
 	// 不能叫 Global：mihomo 自带一个内置 GLOBAL 组，同名会让人分不清。
@@ -35,11 +30,9 @@ type Options struct {
 	// Username 与 Password 非空时写入认证。
 	Username string
 	Password string
-	// Split 为真时按服务端下发的分流规则生成，否则全量走代理。
-	Split bool
-	// Routes 是分流网段。
+	// Routes 是服务端下发的分流网段。
 	Routes []string
-	// Domains 是分流域名后缀。
+	// Domains 是服务端下发的分流域名后缀。
 	Domains []string
 }
 
@@ -69,8 +62,8 @@ func Clash(opts Options) string {
 	b.WriteString("      - DIRECT\n")
 	b.WriteString("      - REJECT\n")
 
-	// DNS：内网域名由代理侧远端解析，本地只需要解析直连流量；
-	// fake-ip 能让域名规则直接命中，不依赖本地能否解析内网域名。
+	// DNS：fake-ip 让域名规则直接命中，不必依赖本机能否解析内网域名；
+	// 内网域名的真正解析发生在隧道内（由代理侧完成）。
 	b.WriteString("dns:\n")
 	b.WriteString("  enable: true\n")
 	b.WriteString("  enhanced-mode: fake-ip\n")
@@ -83,32 +76,28 @@ func Clash(opts Options) string {
 	b.WriteString("    - 8.8.8.8\n")
 
 	b.WriteString("rules:\n")
-	if opts.Split {
-		seen := map[string]bool{}
-		for _, route := range opts.Routes {
-			route = normalizeCIDR(route)
-			if route == "" || seen["cidr:"+route] {
-				continue
-			}
-			seen["cidr:"+route] = true
-			kind := "IP-CIDR"
-			if strings.Contains(route, ":") {
-				kind = "IP-CIDR6"
-			}
-			fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, GroupName)
+	seen := make(map[string]bool, len(opts.Routes)+len(opts.Domains))
+	for _, route := range opts.Routes {
+		route = normalizeCIDR(route)
+		if route == "" || seen["cidr:"+route] {
+			continue
 		}
-		for _, domain := range opts.Domains {
-			domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
-			if domain == "" || seen["domain:"+domain] {
-				continue
-			}
-			seen["domain:"+domain] = true
-			fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, GroupName)
+		seen["cidr:"+route] = true
+		kind := "IP-CIDR"
+		if strings.Contains(route, ":") {
+			kind = "IP-CIDR6"
 		}
-		b.WriteString("  - MATCH,DIRECT\n")
-	} else {
-		b.WriteString("  - MATCH," + GroupName + "\n")
+		fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, GroupName)
 	}
+	for _, domain := range opts.Domains {
+		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
+		if domain == "" || seen["domain:"+domain] {
+			continue
+		}
+		seen["domain:"+domain] = true
+		fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, GroupName)
+	}
+	b.WriteString("  - MATCH,DIRECT\n")
 	return b.String()
 }
 
