@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -29,6 +28,22 @@ import (
 //go:embed static/*
 var assets embed.FS
 
+// ExitInfo 是额外出口的面板视图。
+type ExitInfo struct {
+	Name      string `json:"name"`
+	Node      string `json:"node"`
+	ProxyAddr string `json:"proxy_addr"`
+	// Connected 表示该出口的隧道是否已建立。
+	Connected bool `json:"connected"`
+	// Address 是隧道内网地址。
+	Address string `json:"address"`
+	// Handshake 是最近一次握手时间戳（秒），0 表示没握手成功。
+	Handshake int64 `json:"handshake"`
+	// TxBytes 与 RxBytes 是该出口的收发字节数。
+	TxBytes int64 `json:"tx_bytes"`
+	RxBytes int64 `json:"rx_bytes"`
+}
+
 // Options 是构造面板所需的参数。
 type Options struct {
 	// Agent 是隧道管理器。
@@ -37,6 +52,8 @@ type Options struct {
 	Login *login.Service
 	// Client 是已登录的 API 客户端，用于代理节点图标等资源。
 	Client *api.Client
+	// Exits 是额外出口。
+	Exits []ExitInfo
 	// Config 是运行配置。
 	Config *config.Config
 	// ProxyHost 与 ProxyPort 是订阅里写的代理地址。
@@ -112,6 +129,10 @@ func Handler(opts Options) http.Handler {
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Stats())
 	})
+	mux.HandleFunc("/api/exits", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, opts.Exits)
+	})
+
 	mux.HandleFunc("/api/latencies", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Latencies())
 	})
@@ -155,19 +176,27 @@ func Handler(opts Options) http.Handler {
 		writeJSON(w, map[string]int{"nodes": len(opts.Agent.Nodes())})
 	})
 	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, _ *http.Request) {
-		extra, err := sub.FetchExtra(opts.Config.ExtraSubscription)
-		if err != nil {
-			// 额外订阅拉取失败不影响公司分流，只记一条提示。
-			fmt.Fprintf(os.Stderr, "额外订阅: %v\n", err)
+		var exits []sub.ExitProxy
+		for _, exit := range opts.Exits {
+			_, portText, _ := net.SplitHostPort(exit.ProxyAddr)
+			var port int
+			fmt.Sscanf(portText, "%d", &port)
+			exits = append(exits, sub.ExitProxy{Name: exit.Name, Port: port})
+		}
+		var nodeIPs []string
+		for _, n := range opts.Agent.Nodes() {
+			nodeIPs = append(nodeIPs, n.IP)
+			nodeIPs = append(nodeIPs, n.BackupIPs...)
 		}
 		body := sub.Clash(sub.Options{
-			Host:         opts.ProxyHost,
-			Port:         opts.ProxyPort,
-			Username:     opts.Config.SocksUser,
-			Password:     opts.Config.SocksPass,
-			Routes:       opts.Agent.Routes(),
-			Domains:      opts.Agent.Domains(),
-			ExtraProxies: extra,
+			NodeIPs:  nodeIPs,
+			Host:     opts.ProxyHost,
+			Port:     opts.ProxyPort,
+			Username: opts.Config.SocksUser,
+			Password: opts.Config.SocksPass,
+			Routes:   opts.Agent.Routes(),
+			Domains:  opts.Agent.Domains(),
+			Exits:    exits,
 		})
 		writeSubscription(w, body)
 	})
@@ -337,8 +366,6 @@ type settingsPayload struct {
 	// OSVersion 与 OSPatch 是系统 API level 与补丁日期。
 	OSVersion *string `json:"os_version"`
 	OSPatch   *string `json:"os_version_patch"`
-	// ExtraSubscription 是可选机场订阅，用于日本出口。
-	ExtraSubscription *string `json:"extra_subscription"`
 }
 
 // currentSettings 返回可编辑的配置快照。
@@ -363,7 +390,6 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		DeviceBrand:             &cfg.DeviceBrand,
 		OSVersion:               &cfg.OSVersion,
 		OSPatch:                 &cfg.OSPatch,
-		ExtraSubscription:       &cfg.ExtraSubscription,
 	}
 }
 
@@ -417,11 +443,6 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 		if v != "" && v != cfg.LogLevel {
 			cfg.LogLevel = v
 			restart = append(restart, "log_level")
-		}
-	}
-	if in.ExtraSubscription != nil {
-		if v := strings.TrimSpace(*in.ExtraSubscription); v != cfg.ExtraSubscription {
-			cfg.ExtraSubscription = v
 		}
 	}
 	if in.DeviceModel != nil {

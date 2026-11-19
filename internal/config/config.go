@@ -28,6 +28,16 @@ const (
 	PlatformFeilian Platform = "feilian"
 )
 
+// Exit 是一个额外出口。
+type Exit struct {
+	// Name 是出口名，Clash 里作为代理名出现。
+	Name string `json:"name"`
+	// Node 是分配的节点名，启动时自动连接。
+	Node string `json:"node"`
+	// Listen 是本地混合代理监听地址。
+	Listen string `json:"listen"`
+}
+
 // Config 是磁盘上的配置与状态。
 type Config struct {
 	path string
@@ -66,8 +76,9 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
-	// ExtraSubscription 是可选机场订阅，用于把日本节点并入 Clash 配置。
-	ExtraSubscription string `json:"extra_subscription,omitempty"`
+	// Exits 是额外出口：每个出口是一条独立隧道 + 一个独立本地代理端口。
+	// 典型用法：主隧道连公司 CN 节点跑内网，另开一个出口连 JP-4 跑 Antigravity。
+	Exits []Exit `json:"exits,omitempty"`
 
 	// Mode 是连接模式：auto 表示自动选最快节点，其它值为固定节点名。
 	Mode string `json:"mode,omitempty"`
