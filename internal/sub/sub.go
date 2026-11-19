@@ -21,7 +21,8 @@ const (
 	// ProxyName 是唯一代理名。
 	ProxyName = "极速"
 	// GroupName 是唯一选择组名。
-	GroupName = "Global"
+	// 不能叫 Global：mihomo 自带一个内置 GLOBAL 组，同名会让人分不清。
+	GroupName = "节点选择"
 )
 
 // Options 是生成订阅所需的输入。
