@@ -230,7 +230,11 @@ function renderNodes() {
     + list.map(n => '<option value="' + n.name + '">' + n.name + '</option>').join('');
   $('node').value = selected === 'auto' ? '__auto__' : (selected || '');
   $('nodeCount').textContent = list.length + ' 个';
-  $('nodeTable').innerHTML = list.map(n => {
+  const autoOn = selected === 'auto';
+  $('nodeTable').innerHTML = '<tr><td><div class="node-name"><span class="node-ico" style="display:inline-flex;align-items:center;justify-content:center">🚀</span><span>' + (autoOn ? '✓ ' : '') + '自动选择</span></div></td>'
+    + '<td class="muted">按测速结果连接最快节点</td><td></td><td class="muted">–</td><td></td>'
+    + '<td>' + (autoOn ? '' : '<button onclick="pickNode(\'__auto__\')">选择</button>') + '</td></tr>'
+    + list.map(n => {
     const ms = latency[n.name];
     const lat = ms === undefined ? '<span class="muted">–</span>'
       : (ms < 0 ? '<span class="muted">超时</span>' : ms + ' ms');

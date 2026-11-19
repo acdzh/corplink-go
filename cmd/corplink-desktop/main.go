@@ -153,9 +153,6 @@ func main() {
 					if st.testing {
 						ui.Spinner(c)
 					}
-					if rt.Agent.Auto() {
-						ui.Text(c, "自动选择").FontSize(fsTiny).TextColor(p.Muted)
-					}
 				})
 
 				switch st.tab {
@@ -182,6 +179,28 @@ func main() {
 					})
 					ui.Scroll(c).Grow(1).Children(func() {
 						ui.Column(c).Gap(8).Children(func() {
+							// 「自动」是列表里的一项，不是独立开关。
+							autoOn := rt.Agent.Auto()
+							autoBg := p.Card
+							if autoOn {
+								autoBg = p.OkBg
+							}
+							ui.Row(c).Key("__auto__").FillWidth().Radius(radiusCard).Padding(10, 14).
+								AlignItems(ui.Center).Background(autoBg).Border(1, p.Border).Children(func() {
+								ui.Column(c).Gap(1).Grow(1).Children(func() {
+									label := "自动选择"
+									if autoOn {
+										label = "✓ 自动选择"
+									}
+									ui.Text(c, label).FontSize(fsBody).TextColor(p.Text).SingleLine()
+									ui.Text(c, "按测速结果连接最快节点").FontSize(fsTiny).TextColor(p.Faint).SingleLine()
+								})
+								if !autoOn {
+									if ui.Button(c, "连接").Clicked() {
+										connect("auto")
+									}
+								}
+							})
 							for _, n := range nodes {
 								name := displayName(n.EnName, n.Name, n.IP)
 								lat := ""
