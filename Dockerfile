@@ -3,6 +3,9 @@
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux
+# 允许构建时覆盖模块代理（国内网络建议 goproxy.cn）
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
