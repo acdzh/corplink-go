@@ -66,6 +66,9 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
+	// ExtraSubscription 是可选机场订阅，用于把日本节点并入 Clash 配置。
+	ExtraSubscription string `json:"extra_subscription,omitempty"`
+
 	// Mode 是连接模式：auto 表示自动选最快节点，其它值为固定节点名。
 	Mode string `json:"mode,omitempty"`
 	// AutoModeIntervalSeconds 是自动选路的测速间隔（秒），0 表示默认 300。

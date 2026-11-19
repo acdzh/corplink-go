@@ -1,28 +1,43 @@
 // Package sub 生成 Clash 订阅。
 //
-// 设计要点：只暴露一个本地端口、只下发一份配置；分流完全交给 Clash ——
-// 把服务端 /vpn/conn 返回的分流网段与域名后缀翻译成规则，命中走代理，其余直连。
+// 设计：只暴露一个本地端口、只下发一份配置，分流交给 Clash。
+// 若配置了 ExtraSubscription（例如自己的机场），会把它里面的日本节点
+// 并入配置，并单独成一个「日本出口」组，供 Antigravity 等流量使用。
 package sub
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // 名称常量，保证面板与订阅里的一致。
 const (
 	// Title 是配置标题。
 	Title = "Corplink Go"
-	// ProxyName 是唯一代理名。
+	// ProxyName 是公司隧道代理名。
 	ProxyName = "CorpLink"
-	// GroupName 是唯一选择组。
-	// 客户端（Clash Verge 等）的「代理组」页面只认 proxy-groups，
-	// 不建组会出现"未获取到代理信息"，所以保留一个组。
-	GroupName = "节点选择"
-	// Target 是规则指向的目标。
-	Target = GroupName
+	// JapanGroup 是日本出口选择组。
+	JapanGroup = "日本出口"
 )
+
+// AntigravityDomains 是需要走日本出口的域名后缀。
+// 放在公司分流规则之前，命中优先。
+var AntigravityDomains = []string{
+	"antigravity.google",
+	"cloudcode-pa.googleapis.com",
+	"generativelanguage.googleapis.com",
+	"gemini.google.com",
+	"accounts.google.com",
+	"googleapis.com",
+	"gstatic.com",
+	"googleusercontent.com",
+}
 
 // Options 是生成订阅所需的输入。
 type Options struct {
@@ -37,6 +52,8 @@ type Options struct {
 	Routes []string
 	// Domains 是服务端下发的分流域名后缀。
 	Domains []string
+	// ExtraProxies 是并入配置的额外代理（例如机场的日本节点）。
+	ExtraProxies []map[string]any
 }
 
 // Clash 生成 Clash 配置。
@@ -45,41 +62,55 @@ func Clash(opts Options) string {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	var b strings.Builder
-	b.WriteString("# " + Title + "\n")
-	b.WriteString("proxies:\n")
-	fmt.Fprintf(&b, "  - name: %q\n", ProxyName)
-	b.WriteString("    type: socks5\n")
-	fmt.Fprintf(&b, "    server: %s\n", host)
-	fmt.Fprintf(&b, "    port: %d\n", opts.Port)
-	b.WriteString("    udp: true\n")
+
+	corp := map[string]any{
+		"name":   ProxyName,
+		"type":   "socks5",
+		"server": host,
+		"port":   opts.Port,
+		"udp":    true,
+	}
 	if opts.Username != "" {
-		fmt.Fprintf(&b, "    username: %q\n", opts.Username)
-		fmt.Fprintf(&b, "    password: %q\n", opts.Password)
+		corp["username"] = opts.Username
+		corp["password"] = opts.Password
 	}
 
-	// DNS：fake-ip 让域名规则直接命中，不必依赖本机能否解析内网域名；
-	// 内网域名的真正解析发生在隧道内（由代理侧完成）。
-	b.WriteString("proxy-groups:\n")
-	fmt.Fprintf(&b, "  - name: %q\n", GroupName)
-	b.WriteString("    type: select\n")
-	b.WriteString("    proxies:\n")
-	fmt.Fprintf(&b, "      - %q\n", ProxyName)
-	b.WriteString("      - DIRECT\n")
-	b.WriteString("      - REJECT\n")
+	proxies := []any{corp}
+	japanNames := make([]string, 0, len(opts.ExtraProxies))
+	for _, extra := range opts.ExtraProxies {
+		name, _ := extra["name"].(string)
+		if name == "" {
+			continue
+		}
+		japanNames = append(japanNames, name)
+		proxies = append(proxies, extra)
+	}
 
-	b.WriteString("dns:\n")
-	b.WriteString("  enable: true\n")
-	b.WriteString("  enhanced-mode: fake-ip\n")
-	b.WriteString("  fake-ip-range: 198.18.0.1/16\n")
-	b.WriteString("  nameserver:\n")
-	b.WriteString("    - 223.5.5.5\n")
-	b.WriteString("    - 119.29.29.29\n")
-	b.WriteString("  fallback:\n")
-	b.WriteString("    - 1.1.1.1\n")
-	b.WriteString("    - 8.8.8.8\n")
+	var groups []any
+	if len(japanNames) > 0 {
+		jpProxies := append(append([]string{}, japanNames...), ProxyName, "DIRECT")
+		groups = append(groups, map[string]any{
+			"name":    JapanGroup,
+			"type":    "select",
+			"proxies": jpProxies,
+		})
+	}
 
-	b.WriteString("rules:\n")
+	// DNS：fake-ip 让域名规则直接命中，内网域名交给隧道内解析。
+	dns := map[string]any{
+		"enable":        true,
+		"enhanced-mode": "fake-ip",
+		"fake-ip-range": "198.18.0.1/16",
+		"nameserver":    []string{"223.5.5.5", "119.29.29.29"},
+		"fallback":      []string{"1.1.1.1", "8.8.8.8"},
+	}
+
+	rules := make([]string, 0, len(opts.Routes)+len(opts.Domains)+len(AntigravityDomains)+2)
+	if len(japanNames) > 0 {
+		for _, domain := range AntigravityDomains {
+			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, JapanGroup))
+		}
+	}
 	seen := make(map[string]bool, len(opts.Routes)+len(opts.Domains))
 	for _, route := range opts.Routes {
 		route = normalizeCIDR(route)
@@ -91,7 +122,7 @@ func Clash(opts Options) string {
 		if strings.Contains(route, ":") {
 			kind = "IP-CIDR6"
 		}
-		fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, Target)
+		rules = append(rules, fmt.Sprintf("%s,%s,%s,no-resolve", kind, route, ProxyName))
 	}
 	for _, domain := range opts.Domains {
 		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
@@ -99,10 +130,90 @@ func Clash(opts Options) string {
 			continue
 		}
 		seen["domain:"+domain] = true
-		fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, Target)
+		rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, ProxyName))
 	}
-	b.WriteString("  - MATCH,DIRECT\n")
+	rules = append(rules, "MATCH,DIRECT")
+
+	doc := map[string]any{
+		"proxies": proxies,
+		"dns":     dns,
+		"rules":   rules,
+	}
+	if len(groups) > 0 {
+		doc["proxy-groups"] = groups
+	}
+
+	var b strings.Builder
+	b.WriteString("# " + Title + "\n")
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	_ = enc.Encode(doc)
+	_ = enc.Close()
 	return b.String()
+}
+
+// FetchExtra 拉取额外订阅并取出其中的 proxies。
+//
+// 兼容两种常见格式：YAML（Clash 订阅）与 Base64 包裹的 YAML（机场常见）。
+// 只挑带 JP/日本 关键字的节点；一个都没有时返回全部节点。
+func FetchExtra(rawURL string) ([]map[string]any, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return nil, nil
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造额外订阅请求: %w", err)
+	}
+	// 机场通常按 UA 决定返回格式：Clash 客户端拿到 YAML，其他客户端拿到
+	// base64 的节点 URI 列表。这里伪装成 Clash，直接要 YAML。
+	req.Header.Set("User-Agent", "clash-verge/v1.7.7")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("拉取额外订阅: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("拉取额外订阅返回 %d", resp.StatusCode)
+	}
+	body := make([]byte, 0, 64<<10)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		body = append(body, buf[:n]...)
+		if err != nil {
+			break
+		}
+		if len(body) > 4<<20 {
+			break
+		}
+	}
+	text := string(body)
+	if !strings.Contains(text, "proxies:") {
+		if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text)); err == nil {
+			text = string(decoded)
+		}
+	}
+	var doc struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+		return nil, fmt.Errorf("解析额外订阅: %w", err)
+	}
+	var japan []map[string]any
+	for _, proxy := range doc.Proxies {
+		name, _ := proxy["name"].(string)
+		upper := strings.ToUpper(name)
+		if strings.Contains(upper, "JP") || strings.Contains(name, "日本") ||
+			strings.Contains(upper, "JAPAN") || strings.Contains(upper, "TOKYO") ||
+			strings.Contains(upper, "OSAKA") {
+			japan = append(japan, proxy)
+		}
+	}
+	if len(japan) == 0 {
+		return doc.Proxies, nil
+	}
+	return japan, nil
 }
 
 // normalizeCIDR 把裸 IP 补成 CIDR，非法的返回空串。

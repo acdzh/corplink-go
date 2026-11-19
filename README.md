@@ -66,6 +66,31 @@ http://127.0.0.1:13140/clash.yml
 分流规则来自服务端 `/vpn/conn` 下发的网段与域名后缀，未命中走 `MATCH,DIRECT`。
 DNS 使用 fake-ip，内网域名不依赖本机 DNS。
 
+## 多出口（公司内网 + 日本节点）
+
+订阅里可以额外并入一份机场订阅，用于 Antigravity / Gemini 这类需要日本出口的流量：
+
+1. 面板「设置 → 日本出口订阅」填入机场订阅地址（会自动挑出 JP/日本 节点）
+2. 重新拉取订阅 `http://127.0.0.1:13140/clash.yml`
+
+生成的配置会多出一个「日本出口」组：
+
+```yaml
+proxy-groups:
+  - name: 日本出口
+    type: select
+    proxies: ["🇯🇵Japan 01", "🇯🇵Japan 02", "CorpLink", DIRECT]
+rules:
+  - DOMAIN-SUFFIX,antigravity.google,日本出口
+  - DOMAIN-SUFFIX,cloudcode-pa.googleapis.com,日本出口
+  ...
+  - IP-CIDR,...,CorpLink,no-resolve    # 公司内网仍然走隧道
+  - MATCH,DIRECT
+```
+
+公司没有日本节点时也适用；如果公司有 JP 节点，也可以起第二个实例连 JP-4，
+再用 `examples/clash-multi-exit.yml` 里的写法。
+
 ## 命令
 
 | 命令 | 说明 |

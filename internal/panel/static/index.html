@@ -126,6 +126,7 @@
       <label class="field">SOCKS5 用户名<input id="setUser" placeholder="留空不认证"></label>
       <label class="field">SOCKS5 密码<input id="setPass" type="password"></label>
       <label class="field">自动选路间隔（秒）<input id="setAutoInterval" type="number" min="0"></label>
+      <label class="field" style="grid-column:1/-1">日本出口订阅（可选，Clash 用）<input id="setExtra" placeholder="机场订阅地址，留空则不加日本出口"></label>
       <label class="field">设备型号<input id="setModel"></label>
       <label class="field">设备品牌<input id="setBrand"></label>
       <label class="field">系统 API 版本<input id="setOsVer" type="number" min="21" max="40"></label>
@@ -327,6 +328,7 @@ async function loadSettings() {
   $('setPass').value = s.socks5_password || '';
   $('setAutoInterval').value = s.auto_mode_interval_seconds || 300;
   $('setLog').value = s.log_level || 'info';
+  $('setExtra').value = s.extra_subscription || '';
   $('setModel').value = s.device_model || '';
   $('setBrand').value = s.device_brand || '';
   $('setOsVer').value = s.os_version || '';
@@ -342,6 +344,7 @@ async function saveSettings() {
       socks5_password: $('setPass').value,
       auto_mode_interval_seconds: parseInt($('setAutoInterval').value || '300', 10),
       log_level: $('setLog').value,
+      extra_subscription: $('setExtra').value.trim(),
       device_model: $('setModel').value.trim(),
       device_brand: $('setBrand').value.trim(),
       os_version: $('setOsVer').value.trim(),

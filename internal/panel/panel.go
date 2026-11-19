@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -154,13 +155,19 @@ func Handler(opts Options) http.Handler {
 		writeJSON(w, map[string]int{"nodes": len(opts.Agent.Nodes())})
 	})
 	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, _ *http.Request) {
+		extra, err := sub.FetchExtra(opts.Config.ExtraSubscription)
+		if err != nil {
+			// 额外订阅拉取失败不影响公司分流，只记一条提示。
+			fmt.Fprintf(os.Stderr, "额外订阅: %v\n", err)
+		}
 		body := sub.Clash(sub.Options{
-			Host:     opts.ProxyHost,
-			Port:     opts.ProxyPort,
-			Username: opts.Config.SocksUser,
-			Password: opts.Config.SocksPass,
-			Routes:   opts.Agent.Routes(),
-			Domains:  opts.Agent.Domains(),
+			Host:         opts.ProxyHost,
+			Port:         opts.ProxyPort,
+			Username:     opts.Config.SocksUser,
+			Password:     opts.Config.SocksPass,
+			Routes:       opts.Agent.Routes(),
+			Domains:      opts.Agent.Domains(),
+			ExtraProxies: extra,
 		})
 		writeSubscription(w, body)
 	})
@@ -330,6 +337,8 @@ type settingsPayload struct {
 	// OSVersion 与 OSPatch 是系统 API level 与补丁日期。
 	OSVersion *string `json:"os_version"`
 	OSPatch   *string `json:"os_version_patch"`
+	// ExtraSubscription 是可选机场订阅，用于日本出口。
+	ExtraSubscription *string `json:"extra_subscription"`
 }
 
 // currentSettings 返回可编辑的配置快照。
@@ -354,6 +363,7 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		DeviceBrand:             &cfg.DeviceBrand,
 		OSVersion:               &cfg.OSVersion,
 		OSPatch:                 &cfg.OSPatch,
+		ExtraSubscription:       &cfg.ExtraSubscription,
 	}
 }
 
@@ -407,6 +417,11 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 		if v != "" && v != cfg.LogLevel {
 			cfg.LogLevel = v
 			restart = append(restart, "log_level")
+		}
+	}
+	if in.ExtraSubscription != nil {
+		if v := strings.TrimSpace(*in.ExtraSubscription); v != cfg.ExtraSubscription {
+			cfg.ExtraSubscription = v
 		}
 	}
 	if in.DeviceModel != nil {

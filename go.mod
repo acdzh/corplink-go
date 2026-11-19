@@ -7,6 +7,7 @@ replace golang.zx2c4.com/wireguard => github.com/PinkD/wireguard-go v0.0.0-20260
 require (
 	github.com/egoist/mygo v0.10.0
 	golang.zx2c4.com/wireguard v0.0.0-00010101000000-000000000000
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
