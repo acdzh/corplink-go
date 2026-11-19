@@ -19,7 +19,8 @@ const (
 	// Title 是配置标题。
 	Title = "Corplink Go"
 	// ProxyName 是唯一代理名。
-	ProxyName = "极速"
+	// 不要用「极速」：那是官方客户端的模式名（表示按分流规则走），不是节点名。
+	ProxyName = "CorpLink"
 	// GroupName 是唯一选择组名。
 	// 不能叫 Global：mihomo 自带一个内置 GLOBAL 组，同名会让人分不清。
 	GroupName = "节点选择"
