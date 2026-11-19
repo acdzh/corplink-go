@@ -38,6 +38,10 @@ dns:
     - 119.29.29.29
 
 rules:
+  # 0. 防回环：控制面域名 + 全部节点 IP 直连。
+  #    真实订阅会自动生成这些行（例如下面两条），手写配置时务必补齐：
+  #      - DOMAIN-SUFFIX,sealsuite.example.com,DIRECT
+  #      - IP-CIDR,58.246.92.105/32,DIRECT,no-resolve
   # 1. 公司内网：把 /clash.yml 里服务端下发的 IP-CIDR / DOMAIN-SUFFIX 整段复制过来，
   #    目标改成「公司内网」。这里是示意，实际请用订阅生成的内容。
   - IP-CIDR,10.8.8.18/32,公司内网,no-resolve

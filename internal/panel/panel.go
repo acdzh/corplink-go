@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -188,15 +189,20 @@ func Handler(opts Options) http.Handler {
 			nodeIPs = append(nodeIPs, n.IP)
 			nodeIPs = append(nodeIPs, n.BackupIPs...)
 		}
+		var directDomains []string
+		if u, err := neturl.Parse(opts.Config.Server); err == nil && u.Hostname() != "" {
+			directDomains = append(directDomains, u.Hostname())
+		}
 		body := sub.Clash(sub.Options{
-			NodeIPs:  nodeIPs,
-			Host:     opts.ProxyHost,
-			Port:     opts.ProxyPort,
-			Username: opts.Config.SocksUser,
-			Password: opts.Config.SocksPass,
-			Routes:   opts.Agent.Routes(),
-			Domains:  opts.Agent.Domains(),
-			Exits:    exits,
+			DirectDomains: directDomains,
+			NodeIPs:       nodeIPs,
+			Host:          opts.ProxyHost,
+			Port:          opts.ProxyPort,
+			Username:      opts.Config.SocksUser,
+			Password:      opts.Config.SocksPass,
+			Routes:        opts.Agent.Routes(),
+			Domains:       opts.Agent.Domains(),
+			Exits:         exits,
 		})
 		writeSubscription(w, body)
 	})

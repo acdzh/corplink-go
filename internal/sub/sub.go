@@ -59,6 +59,9 @@ type Options struct {
 	Domains []string
 	// Exits 是额外出口。
 	Exits []ExitProxy
+	// DirectDomains 是必须直连的域名（本程序调用的控制面域名），
+	// 否则 fake-ip + 域名规则会把我们自己的 API 请求送回代理。
+	DirectDomains []string
 	// NodeIPs 是节点公网 IP（含备用），必须直连：
 	// 否则 Clash 开 TUN/全局模式时会把这些流量再送回本代理，形成回环。
 	NodeIPs []string
@@ -115,9 +118,14 @@ func Clash(opts Options) string {
 	}
 
 	rules := make([]string, 0, len(opts.Routes)+len(opts.Domains)+len(AntigravityDomains)+len(opts.NodeIPs)+2)
-	// 0a. 本程序自身的出站流量必须直连（进程级兜底，mihomo 在 macOS/Windows 支持）。
-	rules = append(rules, "PROCESS-NAME,CorplinkGo,DIRECT")
 	// 0b. 节点自身的公网 IP 也必须直连，否则 TUN/全局模式下会自己连自己。
+	for _, domain := range opts.DirectDomains {
+		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
+		if domain == "" {
+			continue
+		}
+		rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,DIRECT", domain))
+	}
 	nodeSeen := make(map[string]bool, len(opts.NodeIPs))
 	for _, ip := range opts.NodeIPs {
 		ip = strings.TrimSpace(ip)
