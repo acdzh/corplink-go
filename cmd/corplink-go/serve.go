@@ -12,7 +12,6 @@ import (
 	"flag"
 
 	"github.com/acdzh/corplink-go/internal/app"
-	"github.com/acdzh/corplink-go/internal/config"
 )
 
 // 关闭超时。
@@ -21,7 +20,7 @@ const shutdownTimeout = 5 * time.Second
 // runServe 起守护进程：混合代理端口 + 控制面板。
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	cfgPath := fs.String("config", "./config.json", "配置文件路径")
+	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	proxyAddr := fs.String("proxy", "", "混合代理监听地址（SOCKS5 + HTTP），默认取配置")
 	panelAddr := fs.String("panel", "", "控制面板监听地址，默认取配置")
 	nodeName := fs.String("name", "", "启动时自动连接的节点名，默认取配置")
@@ -33,7 +32,7 @@ func runServe(args []string) error {
 		}
 		return err
 	}
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		return err
 	}

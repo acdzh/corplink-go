@@ -18,7 +18,7 @@ const connectTimeout = 30 * time.Second
 // runConnect 选节点 -> 生成密钥对 -> 向节点请求 /vpn/conn，打印隧道参数。
 func runConnect(args []string) error {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
-	cfgPath := fs.String("config", "./config.json", "配置文件路径")
+	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	nodeName := fs.String("name", "", "指定节点 en_name，留空取第一个")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
@@ -27,7 +27,7 @@ func runConnect(args []string) error {
 		}
 		return err
 	}
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		return err
 	}

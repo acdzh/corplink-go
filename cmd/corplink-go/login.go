@@ -25,7 +25,7 @@ const loginTimeout = 10 * time.Minute
 // device/callback 换会话 -> 拉 TOTP secret 供后续二次验证。
 func runLogin(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	cfgPath := fs.String("config", "./config.json", "配置文件路径")
+	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	alias := fs.String("alias", "lark", "第三方登录方式（lark / bytedance_sso 等）")
 	callback := fs.String("callback", "", "直接给回调 URL（跳过人工粘贴）")
 	scene := fs.String("scene", "feilian", "MFA 的 login_scene 取值")
@@ -39,7 +39,7 @@ func runLogin(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		return err
 	}

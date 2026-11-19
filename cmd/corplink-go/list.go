@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/acdzh/corplink-go/internal/api"
-	"github.com/acdzh/corplink-go/internal/config"
 )
 
 // listTimeout 是节点列表请求的超时。
@@ -17,7 +16,7 @@ const listTimeout = 30 * time.Second
 // runList 拉取并打印可用节点，用于验证会话与签名是否被服务端接受。
 func runList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	cfgPath := fs.String("config", "./config.json", "配置文件路径")
+	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -25,7 +24,7 @@ func runList(args []string) error {
 		}
 		return err
 	}
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		return err
 	}

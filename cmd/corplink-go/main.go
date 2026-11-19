@@ -51,6 +51,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "connect 失败:", err)
 			os.Exit(1)
 		}
+	case "paths":
+		if err := runPaths(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "paths 失败:", err)
+			os.Exit(1)
+		}
 	case "serve":
 		if err := runServe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "serve 失败:", err)
@@ -71,7 +76,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `用法:
   corplink-go probe  [-config ./config.json] [-v]
   corplink-go login  [-config ./config.json] [-alias lark] [-callback <URL>] [-v]
-  corplink-go list   [-config ./config.json] [-v]
+  corplink-go list   [-config <path>] [-v]
+  corplink-go paths  查看数据目录与端口
   corplink-go connect [-config ./config.json] [-v]
   corplink-go serve  [-config ./config.json] [-listen 127.0.0.1:8081] [-port-base 12001] [-max-tunnels 2]
   corplink-go version
@@ -82,13 +88,13 @@ func usage() {
 // 解析企业 -> 拉登录配置 -> 生成 PKCE -> 拉第三方登录方式。
 func runProbe(args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
-	cfgPath := fs.String("config", "./config.json", "配置文件路径")
+	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		return err
 	}

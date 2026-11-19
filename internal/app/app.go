@@ -128,7 +128,7 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	proxyLn, err := net.Listen("tcp", proxyListen)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("监听代理端口 %s: %w", proxyListen, err)
+		return nil, fmt.Errorf("监听代理端口 %s 失败（可能已有实例在运行）: %w", proxyListen, err)
 	}
 	go func() {
 		if err := proxy.New(ag).Serve(proxyLn); err != nil && runCtx.Err() == nil {

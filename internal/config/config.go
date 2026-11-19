@@ -180,6 +180,17 @@ func (c *Config) EnsureDeviceID() (bool, error) {
 	return true, c.Save()
 }
 
+// DefaultPath 返回用户级默认配置路径。
+//
+// CLI 与桌面版共用同一份数据，避免"命令里登录了、桌面版还说未登录"这类分裂。
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("定位用户配置目录: %w", err)
+	}
+	return filepath.Join(dir, "CorpLinkGo", "config.json"), nil
+}
+
 // Dir 返回数据目录（配置文件所在目录）。
 func (c *Config) Dir() string {
 	if c.path == "" {

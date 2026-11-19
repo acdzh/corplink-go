@@ -10,6 +10,18 @@ import (
 	"github.com/acdzh/corplink-go/internal/sign"
 )
 
+// loadConfig 读取配置；path 为空时使用用户级默认路径。
+func loadConfig(path string) (*config.Config, error) {
+	if path == "" {
+		p, err := config.DefaultPath()
+		if err != nil {
+			return nil, err
+		}
+		path = p
+	}
+	return config.Load(path)
+}
+
 // newClient 按配置构造客户端，并装配 v1 签名器。
 func newClient(cfg *config.Config, verbose bool) (*api.Client, error) {
 	client, err := api.New(api.Options{
