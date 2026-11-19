@@ -19,6 +19,8 @@ const (
 	Title = "Corplink Go"
 	// ProxyName 是主（公司）隧道代理名。
 	ProxyName = "CorpLink"
+	// GroupName 是主选择组名。
+	GroupName = "节点选择"
 	// ExitGroup 是额外出口的选择组名。
 	ExitGroup = "日本出口"
 )
@@ -99,14 +101,19 @@ func Clash(opts Options) string {
 		proxies = append(proxies, socks(exit.Name, exit.Port))
 	}
 
-	var groups []any
+	// 主选择组：客户端只渲染 proxy-groups，必须保留一个。
+	mainGroup := map[string]any{
+		"name":    GroupName,
+		"type":    "select",
+		"proxies": append([]string{ProxyName}, append(exitNames, "DIRECT")...),
+	}
+	groups := []any{mainGroup}
 	if len(exitNames) > 0 {
-		group := map[string]any{
+		groups = append(groups, map[string]any{
 			"name":    ExitGroup,
 			"type":    "select",
 			"proxies": append(append([]string{}, exitNames...), ProxyName, "DIRECT"),
-		}
-		groups = append(groups, group)
+		})
 	}
 
 	dns := map[string]any{
@@ -170,7 +177,7 @@ func Clash(opts Options) string {
 			continue
 		}
 		seen["domain:"+domain] = true
-		rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, ProxyName))
+		rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", domain, GroupName))
 	}
 	rules = append(rules, "MATCH,DIRECT")
 
@@ -179,9 +186,7 @@ func Clash(opts Options) string {
 		"dns":     dns,
 		"rules":   rules,
 	}
-	if len(groups) > 0 {
-		doc["proxy-groups"] = groups
-	}
+	doc["proxy-groups"] = groups
 
 	var b strings.Builder
 	b.WriteString("# " + Title + "\n")
