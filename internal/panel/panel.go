@@ -7,11 +7,13 @@ package panel
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -134,8 +136,7 @@ func Handler(opts Options) http.Handler {
 			Routes:   opts.Agent.Routes(),
 			Domains:  opts.Agent.Domains(),
 		})
-		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-		_, _ = w.Write([]byte(body))
+		writeSubscription(w, body)
 	})
 
 	mux.HandleFunc("/api/login/start", func(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +260,18 @@ func Handler(opts Options) http.Handler {
 		mux.Handle("/", http.FileServer(http.FS(static)))
 	}
 	return mux
+}
+
+// writeSubscription 按常见订阅惯例回写标题等响应头，
+// 这样 Clash Verge 等客户端导入时会自动用上配置名，而不是拿 URL 当名字。
+func writeSubscription(w http.ResponseWriter, body string) {
+	name := sub.Title
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(name)))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))
+	w.Header().Set("Profile-Update-Interval", "24")
+	w.Header().Set("Cache-Control", "private, no-cache, no-transform")
+	_, _ = w.Write([]byte(body))
 }
 
 // writeJSON 输出 JSON 响应。

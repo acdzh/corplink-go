@@ -16,10 +16,8 @@ const (
 	Title = "Corplink Go"
 	// ProxyName 是唯一代理名。
 	ProxyName = "CorpLink"
-	// GroupName 是唯一选择组名。
-	// 不能叫 Global：mihomo 自带一个内置 GLOBAL 组，同名会让人分不清。
-	// 组名描述"这批流量走哪"，而不是模式名（极速/全局是官方客户端的模式）。
-	GroupName = "公司网络"
+	// Target 是规则指向的目标：直接指向唯一代理，不额外建组。
+	Target = ProxyName
 )
 
 // Options 是生成订阅所需的输入。
@@ -55,13 +53,6 @@ func Clash(opts Options) string {
 		fmt.Fprintf(&b, "    username: %q\n", opts.Username)
 		fmt.Fprintf(&b, "    password: %q\n", opts.Password)
 	}
-	b.WriteString("proxy-groups:\n")
-	fmt.Fprintf(&b, "  - name: %q\n", GroupName)
-	b.WriteString("    type: select\n")
-	b.WriteString("    proxies:\n")
-	fmt.Fprintf(&b, "      - %q\n", ProxyName)
-	b.WriteString("      - DIRECT\n")
-	b.WriteString("      - REJECT\n")
 
 	// DNS：fake-ip 让域名规则直接命中，不必依赖本机能否解析内网域名；
 	// 内网域名的真正解析发生在隧道内（由代理侧完成）。
@@ -88,7 +79,7 @@ func Clash(opts Options) string {
 		if strings.Contains(route, ":") {
 			kind = "IP-CIDR6"
 		}
-		fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, GroupName)
+		fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, Target)
 	}
 	for _, domain := range opts.Domains {
 		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
@@ -96,7 +87,7 @@ func Clash(opts Options) string {
 			continue
 		}
 		seen["domain:"+domain] = true
-		fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, GroupName)
+		fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, Target)
 	}
 	b.WriteString("  - MATCH,DIRECT\n")
 	return b.String()
