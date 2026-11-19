@@ -12,8 +12,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/acdzh/corplink-go/internal/config"
 )
 
 // matchBaseURL 是公司代码解析服务，与具体企业的服务端地址无关。
@@ -35,6 +33,7 @@ type Client struct {
 	ua      string
 	lang    string
 	device  string
+	meta    Meta
 	signer  Signer
 	verbose bool
 }
@@ -53,6 +52,8 @@ type Options struct {
 	InsecureSkipVerify bool
 	// Verbose 打开请求级日志。
 	Verbose bool
+	// Meta 是随请求上报的客户端元信息；零值字段会被默认值填充。
+	Meta Meta
 }
 
 // New 构造客户端并初始化 Cookie 容器。
@@ -76,13 +77,15 @@ func New(opts Options) (*Client, error) {
 	if opts.InsecureSkipVerify {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	meta := opts.Meta
+	meta = withMetaDefaults(meta)
 	ua := opts.UserAgent
 	if ua == "" {
-		ua = UserAgentFrom(config.Default())
+		ua = UserAgent(meta)
 	}
 	lang := opts.Language
 	if lang == "" {
-		lang = "zh-CN"
+		lang = "zh"
 	}
 	return &Client{
 		base:    base,
@@ -90,21 +93,35 @@ func New(opts Options) (*Client, error) {
 		ua:      ua,
 		lang:    lang,
 		device:  opts.DeviceID,
+		meta:    meta,
 		verbose: opts.Verbose,
 	}, nil
 }
 
-// UserAgentFrom 按官方客户端格式拼出 User-Agent：
-// CorpLink/<version> (<brand><model>; Android <release>; <language>)
-func UserAgentFrom(cfg *config.Config) string {
-	brand := cfg.DeviceBrand
-	model := cfg.DeviceModel
-	release := cfg.OSVersion
-	lang := cfg.Language
-	if lang == "" {
-		lang = "zh-CN"
+// UserAgent 按官方客户端格式拼出 User-Agent：
+// CorpLink/<version> (<brand><model>; Android <api>; <language>)
+func UserAgent(m Meta) string {
+	return fmt.Sprintf("CorpLink/%s (%s%s; Android %s; %s)", m.AppVersion, m.Brand, m.Model, m.OSVersion, m.Language)
+}
+
+// withMetaDefaults 为未显式指定的元信息补默认值，保证请求参数齐全。
+func withMetaDefaults(m Meta) Meta {
+	if m.OS == "" {
+		m.OS = LoginOS
 	}
-	return fmt.Sprintf("CorpLink/%s (%s%s; Android %s; %s)", AppVersion, brand, model, release, lang)
+	if m.AppVersion == "" {
+		m.AppVersion = AppVersion
+	}
+	if m.BuildNumber == "" {
+		m.BuildNumber = BuildNumber
+	}
+	if m.Language == "" {
+		m.Language = "zh"
+	}
+	if m.ClientSource == "" {
+		m.ClientSource = "FeiLian"
+	}
+	return m
 }
 
 // SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
@@ -123,7 +140,11 @@ func (c *Client) SetCookies(cookies []*http.Cookie) { c.http.Jar.SetCookies(c.ba
 func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any) (*Envelope, error) {
 	u := *c.base
 	u.Path = strings.TrimRight(c.base.Path, "/") + ep.Path
-	u.RawQuery = query.Encode()
+	merged := c.meta.Query()
+	for k, vs := range query {
+		merged[k] = vs
+	}
+	u.RawQuery = merged.Encode()
 
 	var payload []byte
 	if body != nil {

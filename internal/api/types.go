@@ -100,3 +100,15 @@ type MfaType struct {
 	Email    string   `json:"email"`
 	Mobile   string   `json:"mobile"`
 }
+
+// VpnInfo 是 /api/vpn/list 返回的单个节点。
+type VpnInfo struct {
+	IP           string `json:"ip"`
+	APIPort      int    `json:"api_port"`
+	VPNPort      int    `json:"vpn_port"`
+	ProtocolMode int    `json:"protocol_mode"`
+	Name         string `json:"name"`
+	EnName       string `json:"en_name"`
+	ID           int    `json:"id"`
+	Timeout      int    `json:"timeout"`
+}

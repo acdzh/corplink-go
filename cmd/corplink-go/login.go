@@ -65,6 +65,7 @@ func runLogin(args []string) error {
 		DeviceID: cfg.DeviceID,
 		Language: cfg.Language,
 		Verbose:  *verbose,
+		Meta:     config.Meta(cfg),
 	})
 	if err != nil {
 		return err
@@ -185,10 +186,13 @@ func completeMfa(ctx context.Context, svc *auth.Service, cfg *config.Config, sce
 	return fmt.Errorf("所有 mfa 组合都失败，无法下发二次认证验证码")
 }
 
-// candidateAccounts 生成 MFA 账号候选：完整账号、去掉域名的前缀、掩码邮箱。
+// candidateAccounts 生成 MFA 账号候选。
+//
+// 手机端抓包确认：官方客户端调用 sendMfaCode 时 account 传的是空串
+// （服务端用会话里的登录态定位账号），因此空串必须排第一，其余仅作为兜底。
 func candidateAccounts(username, serverAccount string) []string {
-	seen := map[string]bool{}
-	var out []string
+	seen := map[string]bool{"": true}
+	out := []string{""}
 	add := func(v string) {
 		v = strings.TrimSpace(v)
 		if v == "" || seen[v] {

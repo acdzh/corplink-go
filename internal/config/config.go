@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/acdzh/corplink-go/internal/api"
 )
 
 // Platform 表示飞连的登录方式。当前只实现 TPS（飞书/SSO 扫码）与密码。
@@ -47,8 +49,14 @@ type Config struct {
 	DeviceModel string `json:"device_model"`
 	// DeviceBrand 参与 User-Agent 构造，形如 Xiaomi。
 	DeviceBrand string `json:"device_brand"`
-	// OSVersion 参与 User-Agent 构造，形如 12。
+	// OSVersion 是系统 API level，服务端按整数校验，shape 如 32。
 	OSVersion string `json:"os_version"`
+	// OSPatch 是系统安全补丁日期，服务端按 yyyy-mm-dd 校验。
+	OSPatch string `json:"os_version_patch"`
+	// AppVersion 上报的客户端版本号，需与租户允许的版本一致。
+	AppVersion string `json:"app_version"`
+	// BuildNumber 上报的客户端构建号。
+	BuildNumber string `json:"build_number"`
 	// Language 参与 User-Agent 与 Accept-Language 构造。
 	Language string `json:"language"`
 
@@ -69,9 +77,12 @@ func Default() *Config {
 	return &Config{
 		DeviceName:  "corplink-go",
 		DeviceModel: "M2007J17C",
-		DeviceBrand: "Xiaomi",
-		OSVersion:   "12",
-		Language:    "zh-CN",
+		DeviceBrand: "Redmi",
+		OSVersion:   "32",
+		OSPatch:     "2023-07-05",
+		AppVersion:  "3.3.24",
+		BuildNumber: "2485",
+		Language:    "zh",
 		LogLevel:    "info",
 	}
 }
@@ -126,4 +137,17 @@ func (c *Config) SessionPath() string {
 		return "corplink.cookies.json"
 	}
 	return strings.TrimSuffix(c.path, ".json") + ".cookies.json"
+}
+
+// Meta 把配置里的客户端标识映射成请求参数；避免在多个包里重复拼装。
+func Meta(c *Config) api.Meta {
+	return api.Meta{
+		OSVersion:   c.OSVersion,
+		OSPatch:     c.OSPatch,
+		AppVersion:  c.AppVersion,
+		BuildNumber: c.BuildNumber,
+		Model:       c.DeviceModel,
+		Brand:       c.DeviceBrand,
+		Language:    c.Language,
+	}
 }

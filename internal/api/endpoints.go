@@ -1,6 +1,10 @@
 package api
 
-import "net/url"
+import (
+	"net/url"
+	"strconv"
+	"time"
+)
 
 // 客户端伪装参数：与官方 Android 客户端保持一致的版本号。
 const (
@@ -46,22 +50,43 @@ var (
 	EndpointVPNReport = Endpoint{Path: "/vpn/report"}
 )
 
-// loginQuery 构造登录类接口的公共查询参数。
-func loginQuery() url.Values {
-	return url.Values{"os": {LoginOS}, "os_version": {LoginOSVersion}}
+// Meta 是随每个请求上报的客户端元信息。
+//
+// 官方客户端把这些字段放在 query 里（而不是 header），服务端据此校验客户端版本
+// 与设备环境；缺字段时登录 MFA 会返回 3019 "没有可用的二次认证方法"。
+type Meta struct {
+	// OS 是平台名，登录类接口固定 Android。
+	OS string
+	// OSVersion 是系统 API level（整数），例如 Android 12 的 32。
+	OSVersion string
+	// OSPatch 是系统安全补丁日期。
+	OSPatch string
+	// AppVersion 是客户端版本号。
+	AppVersion string
+	// BuildNumber 是客户端构建号。
+	BuildNumber string
+	// Model 是设备型号。
+	Model string
+	// Brand 是设备厂商。
+	Brand string
+	// Language 是语言标签，官方客户端用 zh 而非 zh-CN。
+	Language string
+	// ClientSource 固定为 FeiLian。
+	ClientSource string
 }
 
-// vpnQuery 构造节点类接口的公共查询参数。
-func vpnQuery() url.Values {
-	q := url.Values{
-		"app_version":   {AppVersion},
-		"build_number":  {BuildNumber},
-		"client_source": {"FeiLian"},
-		"language":      {"zh-CN"},
-		"os":            {VPNOS},
-		"os_release":    {"Linux"},
-		"os_version":    {"Linux"},
-		"soc":           {"aarch64"},
+// Query 生成通用请求参数，timestamp 由调用时刻决定。
+func (m Meta) Query() url.Values {
+	return url.Values{
+		"os":               {m.OS},
+		"os_version":       {m.OSVersion},
+		"os_version_patch": {m.OSPatch},
+		"app_version":      {m.AppVersion},
+		"build_number":     {m.BuildNumber},
+		"model":            {m.Model},
+		"brand":            {m.Brand},
+		"language":         {m.Language},
+		"client_source":    {m.ClientSource},
+		"timestamp":        {strconv.FormatInt(time.Now().Unix(), 10)},
 	}
-	return q
 }

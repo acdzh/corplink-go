@@ -41,6 +41,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "login 失败:", err)
 			os.Exit(1)
 		}
+	case "list":
+		if err := runList(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "list 失败:", err)
+			os.Exit(1)
+		}
 	case "version", "-v", "--version":
 		fmt.Println("corplink-go", version)
 	case "help", "-h", "--help":
@@ -56,6 +61,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `用法:
   corplink-go probe  [-config ./config.json] [-v]
   corplink-go login  [-config ./config.json] [-alias lark] [-callback <URL>] [-v]
+  corplink-go list   [-config ./config.json] [-v]
   corplink-go version
 `)
 }
@@ -97,6 +103,7 @@ func runProbe(args []string) error {
 		DeviceID: cfg.DeviceID,
 		Language: cfg.Language,
 		Verbose:  *verbose,
+		Meta:     config.Meta(cfg),
 	})
 	if err != nil {
 		return err
