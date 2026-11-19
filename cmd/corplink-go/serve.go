@@ -66,9 +66,13 @@ func runServe(args []string) error {
 	if err := ag.LastError(); err != "" {
 		fmt.Printf("警告: 拉取节点列表失败（可能是会话过期）: %s\n", err)
 	}
-	if *nodeName != "" {
-		if err := ag.Connect(startCtx, *nodeName); err != nil {
-			fmt.Printf("自动连接 %s 失败: %v\n", *nodeName, err)
+	autoNode := *nodeName
+	if autoNode == "" {
+		autoNode = cfg.AutoNode
+	}
+	if autoNode != "" {
+		if err := ag.Connect(startCtx, autoNode); err != nil {
+			fmt.Printf("自动连接 %s 失败: %v\n", autoNode, err)
 		}
 	}
 
@@ -79,8 +83,16 @@ func runServe(args []string) error {
 	if proxyListen == "" {
 		proxyListen = "127.0.0.1:3710"
 	}
-	if *keepalive > 0 {
-		go ag.Keepalive(ctx, *keepalive)
+	keepaliveInterval := *keepalive
+	if keepaliveInterval == 0 {
+		if cfg.KeepaliveSeconds > 0 {
+			keepaliveInterval = time.Duration(cfg.KeepaliveSeconds) * time.Second
+		} else {
+			keepaliveInterval = 30 * time.Minute
+		}
+	}
+	if keepaliveInterval > 0 {
+		go ag.Keepalive(ctx, keepaliveInterval)
 	}
 
 	proxyLn, err := net.Listen("tcp", proxyListen)

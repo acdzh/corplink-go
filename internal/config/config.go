@@ -64,6 +64,10 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
+	// AutoNode 是启动时自动连接的节点名，留空则不自动连接。
+	AutoNode string `json:"auto_node,omitempty"`
+	// KeepaliveSeconds 是会话保活间隔（秒），0 表示使用默认 1800。
+	KeepaliveSeconds int `json:"keepalive_seconds,omitempty"`
 	// PanelListen 是控制面板监听地址。
 	PanelListen string `json:"panel_listen,omitempty"`
 	// SubListen 保留旧字段，等价于 panel_listen。

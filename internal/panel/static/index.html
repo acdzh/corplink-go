@@ -43,6 +43,25 @@
 </div>
 
 <div class="card">
+  <h1>设置</h1>
+  <div class="row" style="gap:14px">
+    <label class="muted">代理监听<input id="setProxy" style="display:block;width:200px;margin-top:4px"></label>
+    <label class="muted">面板监听<input id="setPanel" style="display:block;width:200px;margin-top:4px"></label>
+    <label class="muted">自动连接节点<input id="setAutoNode" placeholder="留空不自动连" style="display:block;width:200px;margin-top:4px"></label>
+  </div>
+  <div class="row" style="gap:14px;margin-top:12px">
+    <label class="muted">保活间隔(秒)<input id="setKeepalive" type="number" style="display:block;width:140px;margin-top:4px"></label>
+    <label class="muted">代理用户名<input id="setUser" style="display:block;width:160px;margin-top:4px"></label>
+    <label class="muted">代理密码<input id="setPass" type="password" style="display:block;width:160px;margin-top:4px"></label>
+    <label class="muted">日志级别<input id="setLog" style="display:block;width:120px;margin-top:4px"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="btnSaveSettings">保存设置</button>
+    <span class="muted" id="settingsTip"></span>
+  </div>
+</div>
+
+<div class="card">
   <h1>二次验证 (TOTP)</h1>
   <div class="row">
     <span id="totpCode" style="font-size:26px;font-family:ui-monospace,monospace;letter-spacing:3px">------</span>
@@ -121,6 +140,7 @@ async function latency() {
 async function refreshNodes() {
   const r = await api('/api/refresh', { method: 'POST' });
   await loadNodes();
+loadSettings();
 refreshTotp();
 setInterval(refreshTotp, 1000);
   $('nodeCount').textContent = '共 ' + r.nodes + ' 个节点（已刷新）';
@@ -151,6 +171,39 @@ $('btnDisconnect').onclick = disconnect;
 $('btnLatency').onclick = latency;
 $('btnRefresh').onclick = refreshNodes;
 $('btnCopy').onclick = () => navigator.clipboard.writeText($('sub').textContent);
+
+async function loadSettings() {
+  const s = await api('/api/settings');
+  $('setProxy').value = s.proxy_listen || '';
+  $('setPanel').value = s.panel_listen || '';
+  $('setAutoNode').value = s.auto_node || '';
+  $('setKeepalive').value = s.keepalive_seconds || 0;
+  $('setUser').value = s.socks5_username || '';
+  $('setPass').value = s.socks5_password || '';
+  $('setLog').value = s.log_level || '';
+}
+
+async function saveSettings() {
+  const body = {
+    proxy_listen: $('setProxy').value.trim(),
+    panel_listen: $('setPanel').value.trim(),
+    auto_node: $('setAutoNode').value.trim(),
+    keepalive_seconds: parseInt($('setKeepalive').value || '0', 10),
+    socks5_username: $('setUser').value.trim(),
+    socks5_password: $('setPass').value,
+    log_level: $('setLog').value.trim(),
+  };
+  const r = await api('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  $('settingsTip').textContent = r.restart_required && r.restart_required.length
+    ? '已保存，需重启生效：' + r.restart_required.join(', ')
+    : '已保存并即时生效';
+}
+
+$('btnSaveSettings').onclick = saveSettings;
 
 loadNodes();
 loadSub();
