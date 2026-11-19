@@ -18,7 +18,8 @@ const (
 	ProxyName = "CorpLink"
 	// GroupName 是唯一选择组名。
 	// 不能叫 Global：mihomo 自带一个内置 GLOBAL 组，同名会让人分不清。
-	GroupName = "节点选择"
+	// 组名描述"这批流量走哪"，而不是模式名（极速/全局是官方客户端的模式）。
+	GroupName = "公司网络"
 )
 
 // Options 是生成订阅所需的输入。
