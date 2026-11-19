@@ -6,6 +6,7 @@ package sub
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/acdzh/corplink-go/internal/api"
@@ -69,12 +70,17 @@ func YAML(opts Options) string {
 	b.WriteString("rules:\n")
 	seen := map[string]bool{}
 	for _, route := range opts.Routes {
-		route = strings.TrimSpace(route)
+		route = normalizeCIDR(route)
 		if route == "" || seen["cidr:"+route] {
 			continue
 		}
 		seen["cidr:"+route] = true
-		fmt.Fprintf(&b, "  - IP-CIDR,%s,%s,no-resolve\n", route, group)
+		// 服务端下发的路由里混有裸 IP，必须补成 CIDR；v6 要用 IP-CIDR6 才被内核接受。
+		kind := "IP-CIDR"
+		if strings.Contains(route, ":") {
+			kind = "IP-CIDR6"
+		}
+		fmt.Fprintf(&b, "  - %s,%s,%s,no-resolve\n", kind, route, group)
 	}
 	for _, domain := range opts.Domains {
 		domain = strings.TrimSpace(domain)
@@ -87,6 +93,28 @@ func YAML(opts Options) string {
 	}
 	b.WriteString("  - MATCH,DIRECT\n")
 	return b.String()
+}
+
+// normalizeCIDR 把裸 IP 补成 CIDR，非法的返回空串。
+func normalizeCIDR(route string) string {
+	route = strings.TrimSpace(route)
+	if route == "" {
+		return ""
+	}
+	if strings.Contains(route, "/") {
+		if _, _, err := net.ParseCIDR(route); err != nil {
+			return ""
+		}
+		return route
+	}
+	ip := net.ParseIP(route)
+	if ip == nil {
+		return ""
+	}
+	if ip.To4() != nil {
+		return route + "/32"
+	}
+	return route + "/128"
 }
 
 // nodeName 生成订阅里显示的节点名。

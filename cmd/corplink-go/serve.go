@@ -57,6 +57,11 @@ func runServe(args []string) error {
 			return fmt.Errorf("生成订阅 token: %w", err)
 		}
 		token = hex.EncodeToString(buf)
+		// 落盘，保证重启后订阅地址不变。
+		cfg.SubToken = token
+		if err := cfg.Save(); err != nil {
+			fmt.Printf("保存订阅 token 失败（订阅地址每次会变）: %v\n", err)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
