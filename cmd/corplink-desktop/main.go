@@ -26,52 +26,53 @@ import (
 
 // 字号与圆角，保持层级差：H1 > H2 > 正文 > 小字。
 const (
-	fsH1       float32 = 19
-	fsH2       float32 = 13.5
+	fsH1       float32 = 18
+	fsH2       float32 = 13
 	fsBody     float32 = 13
 	fsSmall    float32 = 12
 	fsTiny     float32 = 11
-	radiusCard float32 = 14
-	radiusChip float32 = 6
+	radiusCard float32 = 10
 )
 
-// palette 是浅色/深色两套配色。
+// palette 是浅色/深色两套配色：只用黑白灰，颜色仅用于状态。
 type palette struct {
-	Dark      bool
-	Bg        ui.Color
-	Card      ui.Color
-	Border    ui.Color
-	Separator ui.Color
-	Text      ui.Color
-	Muted     ui.Color
-	Faint     ui.Color
-	Heading   ui.Color
-	Green     ui.Color
-	Red       ui.Color
-	Yellow    ui.Color
-	Blue      ui.Color
-	OkBg      ui.Color
-	BtnBg     ui.Color
+	Dark    bool
+	Bg      ui.Color
+	Content ui.Color
+	Border  ui.Color
+	Text    ui.Color
+	Muted   ui.Color
+	Faint   ui.Color
+	Ok      ui.Color
+	Bad     ui.Color
+	Hover   ui.Color
 }
 
 func lightPalette() palette {
 	return palette{
-		Bg: ui.Hex("#fbf7f1"), Card: ui.Hex("#ffffff"), Border: ui.Hex("#00000014"),
-		Separator: ui.Hex("#00000010"), Text: ui.Hex("#1d1d1f"), Muted: ui.Hex("#6b6b70"),
-		Faint: ui.Hex("#9a9aa0"), Heading: ui.Hex("#111114"), Green: ui.Hex("#1f9d55"),
-		Red: ui.Hex("#d64545"), Yellow: ui.Hex("#b7791f"), Blue: ui.Hex("#2563eb"),
-		OkBg: ui.Hex("#e8f5ec"), BtnBg: ui.Hex("#f1ece4"),
+		Bg:      ui.Hex("#00000000"),
+		Content: ui.Hex("#ffffff"),
+		Border:  ui.Hex("#00000012"),
+		Text:    ui.Hex("#111113"),
+		Muted:   ui.Hex("#6b6b70"),
+		Faint:   ui.Hex("#a0a0a6"),
+		Ok:      ui.Hex("#3f9d5a"),
+		Bad:     ui.Hex("#c0563f"),
+		Hover:   ui.Hex("#00000008"),
 	}
 }
 
 func darkPalette() palette {
 	return palette{
-		Dark: true,
-		Bg:   ui.Hex("#141214"), Card: ui.Hex("#1e1b1e"), Border: ui.Hex("#ffffff1a"),
-		Separator: ui.Hex("#ffffff12"), Text: ui.Hex("#f5f5f7"), Muted: ui.Hex("#a1a1a6"),
-		Faint: ui.Hex("#77777c"), Heading: ui.Hex("#ffffff"), Green: ui.Hex("#4ade80"),
-		Red: ui.Hex("#f87171"), Yellow: ui.Hex("#fbbf24"), Blue: ui.Hex("#60a5fa"),
-		OkBg: ui.Hex("#16301f"), BtnBg: ui.Hex("#2a262a"),
+		Bg:      ui.Hex("#00000000"),
+		Content: ui.Hex("#1b1a1c"),
+		Border:  ui.Hex("#ffffff14"),
+		Text:    ui.Hex("#f2f2f4"),
+		Muted:   ui.Hex("#a0a0a6"),
+		Faint:   ui.Hex("#6f6f75"),
+		Ok:      ui.Hex("#4ade80"),
+		Bad:     ui.Hex("#f87171"),
+		Hover:   ui.Hex("#ffffff0a"),
 	}
 }
 
@@ -151,160 +152,162 @@ func main() {
 		}()
 	}
 
+	navItems := []string{"节点", "流量", "日志", "关于"}
+
 	view := func(c *ui.Context) {
 		p := pal(c)
-		c.Root().Background(p.Bg)
 		state := rt.Agent.State()
 		stats := rt.Agent.Stats()
 		nodes := rt.Agent.Nodes()
 
-		ui.Column(c).Fill().Padding(16).Gap(12).Children(func() {
-			// 标题栏
-			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Corplink Go").FontSize(fsH1).Bold().TextColor(p.Heading)
+		ui.Row(c).Fill().Children(func() {
+			// 左侧栏：透明，交给系统毛玻璃
+			ui.Column(c).Width(158).Fill().Padding(14, 12).Gap(3).Children(func() {
+				ui.Text(c, "Corplink Go").FontSize(fsH2).Bold().TextColor(p.Text)
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					tone := p.Faint
+					label := "未连接"
+					if state.Connected {
+						tone = p.Ok
+						label = state.Node
+					}
+					ui.Box(c).Size(6, 6).Radius(3).Background(tone)
+					ui.Text(c, label).FontSize(fsTiny).TextColor(p.Muted).Grow(1).SingleLine()
+				})
 				ui.Spacer(c)
-				if state.Connected {
-					ui.Text(c, "● 已连接").FontSize(fsSmall).TextColor(p.Green)
-				} else {
-					ui.Text(c, "○ 未连接").FontSize(fsSmall).TextColor(p.Faint)
-				}
+				ui.Text(c, "代理 "+rt.ProxyAddr).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
+				ui.Text(c, "面板 "+rt.PanelAddr).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
 			})
 
-			// 状态卡
-			ui.Column(c).FillWidth().Radius(radiusCard).Padding(13, 14).Gap(8).
-				Background(p.Card).Border(1, p.Border).Children(func() {
-				title := "未建立隧道"
-				if state.Connected {
-					title = state.Node + " · " + state.Address
-				}
-				ui.Text(c, title).FontSize(fsBody).Bold().TextColor(p.Text)
-				info := "未登录"
-				if rt.Agent.LoggedIn() {
-					info = "已登录 · 节点 " + fmt.Sprint(len(nodes)) + " 个"
-				}
-				if state.Connected {
-					info += " · 路由 " + fmt.Sprint(state.Routes) + " 条"
-				}
-				ui.Text(c, info).FontSize(fsTiny).TextColor(p.Muted)
-				ui.Row(c).Gap(8).Children(func() {
-					if ui.PrimaryButton(c, "连接").Clicked() {
-						connect("")
-					}
-					if ui.Button(c, "断开").Clicked() {
-						rt.Agent.Disconnect()
-						c.Invalidate()
-					}
-					if ui.Button(c, "打开面板").Clicked() {
-						_ = mygo.Shell.OpenExternal(panelURL)
-					}
+			// 分隔线：让透明侧栏与内容区有明确边界
+			ui.Box(c).Width(1).FillHeight().Background(p.Border)
+
+			// 右侧内容：不透明，与透明侧栏形成层次
+			ui.Column(c).Fill().Background(p.Content).Padding(18, 16).Gap(12).Children(func() {
+				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+					ui.Tabs(c, &st.tab, navItems...)
+					ui.Spacer(c)
 					if st.testing {
 						ui.Spinner(c)
 					}
-				})
-			})
-
-			ui.Tabs(c, &st.tab, "节点", "流量", "日志", "关于")
-
-			switch st.tab {
-			case 0:
-				ui.Row(c).FillWidth().Gap(8).Children(func() {
-					if ui.Button(c, "全部测速").Clicked() {
-						testAll()
-					}
-					if ui.Button(c, "自动连最快").Clicked() {
-						connect("auto")
-					}
-					ui.Spacer(c)
 					if rt.Agent.Auto() {
-						ui.Text(c, "自动模式").FontSize(fsTiny).TextColor(p.Blue)
+						ui.Text(c, "自动").FontSize(fsTiny).TextColor(p.Muted)
 					}
 				})
-				ui.Scroll(c).Grow(1).Children(func() {
-					ui.Column(c).Gap(6).Children(func() {
-						for _, n := range nodes {
-							name := displayName(n.EnName, n.Name, n.IP)
-							lat := "—"
-							if ms, ok := st.latency[name]; ok {
-								if ms < 0 {
-									lat = "超时"
-								} else {
-									lat = fmt.Sprintf("%d ms", ms)
-								}
-							}
-							current := state.Connected && state.Node == name
-							rowBg := p.Card
-							if current {
-								rowBg = p.OkBg
-							}
-							ui.Row(c).Key(name).FillWidth().Radius(10).Padding(9, 11).
-								AlignItems(ui.Center).Background(rowBg).Children(func() {
-								ui.Column(c).Gap(2).Grow(1).Children(func() {
-									ui.Text(c, name).FontSize(fsBody).TextColor(p.Text)
-									sub := fmt.Sprintf("%s · %s", protoName(n.ProtocolMode), lat)
-									if n.TagName != "" {
-										sub = n.TagName + " · " + sub
-									}
-									ui.Text(c, sub).FontSize(fsTiny).TextColor(p.Faint)
-								})
-								if current {
-									ui.Text(c, "使用中").FontSize(fsTiny).TextColor(p.Green)
-								} else if ui.Button(c, "连接").Clicked() {
-									connect(name)
-								}
-							})
+				ui.Box(c).FillWidth().Height(1).Background(p.Border)
+
+				switch st.tab {
+				case 0:
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						if ui.Button(c, "连接").Clicked() {
+							connect("")
 						}
-						if len(nodes) == 0 {
-							ui.Text(c, "没有节点，先在面板完成登录").FontSize(fsSmall).TextColor(p.Faint)
+						if ui.Button(c, "断开").Clicked() {
+							rt.Agent.Disconnect()
+							c.Invalidate()
+						}
+						if ui.Button(c, "测速").Clicked() {
+							testAll()
 						}
 					})
-				})
-			case 1:
-				ui.Column(c).FillWidth().Radius(radiusCard).Padding(13, 14).Gap(10).
-					Background(p.Card).Border(1, p.Border).Children(func() {
-					ui.Row(c).FillWidth().Gap(18).Children(func() {
+					ui.Scroll(c).Grow(1).Children(func() {
+						ui.Column(c).Gap(0).Children(func() {
+							for _, n := range nodes {
+								name := displayName(n.EnName, n.Name, n.IP)
+								lat := ""
+								if ms, ok := st.latency[name]; ok {
+									if ms < 0 {
+										lat = " · 超时"
+									} else {
+										lat = fmt.Sprintf(" · %d ms", ms)
+									}
+								}
+								current := state.Connected && state.Node == name
+								ui.Row(c).Key(name).FillWidth().Padding(7, 0).AlignItems(ui.Center).Children(func() {
+									ui.Column(c).Gap(1).Grow(1).Children(func() {
+										label := name
+										if current {
+											label = "✓ " + name
+										}
+										ui.Text(c, label).FontSize(fsBody).TextColor(p.Text).SingleLine()
+										sub := protoName(n.ProtocolMode) + lat
+										if n.TagName != "" {
+											sub = n.TagName + " · " + sub
+										}
+										ui.Text(c, sub).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
+									})
+									if !current {
+										if ui.Button(c, "连接").Clicked() {
+											connect(name)
+										}
+									}
+								})
+								ui.Box(c).FillWidth().Height(1).Background(p.Border)
+							}
+							if len(nodes) == 0 {
+								ui.Text(c, "没有节点，先在面板完成登录").FontSize(fsSmall).TextColor(p.Faint)
+							}
+						})
+					})
+				case 1:
+					ui.Row(c).FillWidth().Gap(32).Children(func() {
 						metric(c, p, "上行", humanBytes(stats.TxBytes))
 						metric(c, p, "下行", humanBytes(stats.RxBytes))
 					})
-					ui.Text(c, "在线 "+humanDuration(stats.UptimeSeconds)).FontSize(fsTiny).TextColor(p.Muted)
+					ui.Text(c, "在线 "+humanDuration(stats.UptimeSeconds)).FontSize(fsSmall).TextColor(p.Muted)
 					if state.Connected {
-						ui.Text(c, "DNS "+strings.Join(state.DNS, ", ")).FontSize(fsTiny).TextColor(p.Muted)
+						ui.Text(c, "隧道 "+state.Address+" · 路由 "+fmt.Sprint(state.Routes)+" 条").
+							FontSize(fsSmall).TextColor(p.Muted)
+						ui.Text(c, "DNS "+strings.Join(state.DNS, ", ")).FontSize(fsSmall).TextColor(p.Muted)
 					}
-				})
-			case 2:
-				events := rt.Agent.Events()
-				ui.Scroll(c).Grow(1).Children(func() {
-					ui.Column(c).Gap(4).Children(func() {
-						for i := len(events) - 1; i >= 0; i-- {
-							e := events[i]
-							ui.Row(c).Gap(8).Children(func() {
-								ui.Text(c, e.Time).FontSize(fsTiny).TextColor(p.Faint)
-								ui.Text(c, e.Message).FontSize(fsSmall).TextColor(p.Muted)
-							})
+				case 2:
+					events := rt.Agent.Events()
+					ui.Scroll(c).Grow(1).Children(func() {
+						ui.Column(c).Gap(3).Children(func() {
+							for i := len(events) - 1; i >= 0; i-- {
+								e := events[i]
+								ui.Row(c).Gap(8).Children(func() {
+									ui.Text(c, e.Time).FontSize(fsTiny).TextColor(p.Faint)
+									ui.Text(c, e.Message).FontSize(fsSmall).TextColor(p.Muted)
+								})
+							}
+							if len(events) == 0 {
+								ui.Text(c, "暂无事件").FontSize(fsSmall).TextColor(p.Faint)
+							}
+						})
+					})
+				case 3:
+					line := func(k, v string) {
+						ui.Row(c).FillWidth().Gap(12).Children(func() {
+							ui.Text(c, k).FontSize(fsSmall).TextColor(p.Faint).Width(44)
+							ui.Text(c, v).FontSize(fsSmall).TextColor(p.Muted).Grow(1).SingleLine()
+						})
+					}
+					line("订阅", subURL)
+					line("配置", cfg.Path())
+					line("设备", cfg.DeviceBrand+" "+cfg.DeviceModel+" · API "+cfg.OSVersion)
+					ui.Box(c).FillWidth().Height(6)
+					ui.Row(c).Gap(8).Children(func() {
+						if ui.Button(c, "打开面板").Clicked() {
+							_ = mygo.Shell.OpenExternal(panelURL)
 						}
-						if len(events) == 0 {
-							ui.Text(c, "暂无事件").FontSize(fsSmall).TextColor(p.Faint)
+						if ui.Button(c, "复制订阅").Clicked() {
+							mygo.Clipboard.WriteText(subURL)
 						}
 					})
-				})
-			case 3:
-				ui.Column(c).FillWidth().Radius(radiusCard).Padding(13, 14).Gap(6).
-					Background(p.Card).Border(1, p.Border).Children(func() {
-					infoLine(c, p, "代理", rt.ProxyAddr)
-					infoLine(c, p, "面板", panelURL)
-					infoLine(c, p, "订阅", subURL)
-					infoLine(c, p, "配置", cfg.Path())
-					infoLine(c, p, "设备", cfg.DeviceBrand+" "+cfg.DeviceModel+" · API "+cfg.OSVersion)
-				})
-			}
+				}
+			})
 		})
 	}
 
 	mygo.App.WhenReady(func() {
 		win = mygo.NewWindow(mygo.WindowOptions{
-			Title:   "Corplink Go",
-			Width:   560,
-			Height:  680,
-			Content: ui.View(view),
+			Title:       "Corplink Go",
+			Width:       680,
+			Height:      580,
+			Transparent: true,
+			Vibrancy:    mygo.VibrancySidebar,
+			Content:     ui.View(view),
 		})
 
 		// 调试用：设置 CORPLINK_CAPTURE=<path> 时把窗口内容截图后退出，
@@ -404,7 +407,7 @@ func main() {
 func metric(c *ui.Context, p palette, label, value string) {
 	ui.Column(c).Gap(2).Children(func() {
 		ui.Text(c, label).FontSize(fsTiny).TextColor(p.Faint)
-		ui.Text(c, value).FontSize(20).Bold().TextColor(p.Heading)
+		ui.Text(c, value).FontSize(20).Bold().TextColor(p.Text)
 	})
 }
 
