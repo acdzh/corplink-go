@@ -131,6 +131,20 @@ func Handler(opts Options) http.Handler {
 			Port:     opts.ProxyPort,
 			Username: opts.Config.SocksUser,
 			Password: opts.Config.SocksPass,
+			Split:    true,
+			Routes:   opts.Agent.Routes(),
+			Domains:  opts.Agent.Domains(),
+		})
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	})
+	mux.HandleFunc("/clash-global.yml", func(w http.ResponseWriter, _ *http.Request) {
+		body := sub.Clash(sub.Options{
+			Host:     opts.ProxyHost,
+			Port:     opts.ProxyPort,
+			Username: opts.Config.SocksUser,
+			Password: opts.Config.SocksPass,
+			Split:    false,
 		})
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		_, _ = w.Write([]byte(body))
@@ -248,7 +262,8 @@ func Handler(opts Options) http.Handler {
 	})
 	mux.HandleFunc("/api/sub", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{
-			"url": fmt.Sprintf("http://%s/clash.yml", opts.PanelHost),
+			"split":  fmt.Sprintf("http://%s/clash.yml", opts.PanelHost),
+			"global": fmt.Sprintf("http://%s/clash-global.yml", opts.PanelHost),
 		})
 	})
 
