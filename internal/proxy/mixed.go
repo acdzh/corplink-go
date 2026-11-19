@@ -176,7 +176,10 @@ func (s *Server) handleHTTP(conn net.Conn, br *bufio.Reader) {
 		return
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(conn, resp.Body)
+	// 必须回写完整响应（状态行 + 头 + 正文），只拷贝 body 会让客户端解析失败。
+	if err := resp.Write(conn); err != nil {
+		return
+	}
 }
 
 // dial 在隧道内拨号；域名先在隧道内解析，目标不在分流网段内则直接拒绝。
