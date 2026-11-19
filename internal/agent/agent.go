@@ -75,7 +75,10 @@ type Agent struct {
 	client *api.Client
 	meta   api.Meta
 
-	mu      sync.RWMutex
+	mu sync.RWMutex
+	// auto 为真时后台循环会自动选最优节点。
+	auto    bool
+	events  []Event
 	nodes   []api.VpnInfo
 	current *active
 	lastErr error
@@ -146,6 +149,19 @@ func (a *Agent) LastError() string {
 	return a.lastErr.Error()
 }
 
+// Mode 返回当前连接模式：auto 或固定节点名。
+func (a *Agent) Mode() string {
+	if a.Auto() {
+		return "auto"
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.current == nil {
+		return ""
+	}
+	return nodeName(a.current.node)
+}
+
 // State 返回当前状态。
 func (a *Agent) State() State {
 	a.mu.RLock()
@@ -201,8 +217,22 @@ func (a *Agent) Allowed(addr netip.Addr) bool {
 	return tun.Allowed(addr)
 }
 
-// Connect 连接指定节点；已连接时先建新隧道再切换。
+// Connect 连接指定节点；name 为 auto 时先测速再选最快的节点。
 func (a *Agent) Connect(ctx context.Context, name string) error {
+	if name == "auto" {
+		best, ok := a.fastest(ctx)
+		if !ok {
+			return fmt.Errorf("没有可用节点")
+		}
+		a.SetAuto(true)
+		return a.connectNode(ctx, best)
+	}
+	a.SetAuto(false)
+	return a.connectNode(ctx, name)
+}
+
+// connectNode 连接指定节点，不改变自动模式开关。
+func (a *Agent) connectNode(ctx context.Context, name string) error {
 	node, err := a.pick(name)
 	if err != nil {
 		return err
@@ -221,6 +251,7 @@ func (a *Agent) Connect(ctx context.Context, name string) error {
 		// make-before-break：新隧道就绪后再释放旧隧道。
 		time.AfterFunc(5*time.Second, old.tun.Close)
 	}
+	a.addEvent("info", "已连接 %s（%s）", nodeName(node), next.addr)
 	return nil
 }
 
@@ -393,7 +424,7 @@ func pingNode(ctx context.Context, node api.VpnInfo) int64 {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	url := fmt.Sprintf("https://%s:%d/vpn/ping", node.IP, node.APIPort)
+	url := fmt.Sprintf("https://%s:%d/vpn/ping", pingTarget(node), node.APIPort)
 	reqCtx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
@@ -411,6 +442,85 @@ func pingNode(ctx context.Context, node api.VpnInfo) int64 {
 		return -1
 	}
 	return time.Since(start).Milliseconds()
+}
+
+// Event 是一条运行事件，用于面板展示。
+type Event struct {
+	// Time 是事件时间。
+	Time string `json:"time"`
+	// Level 是 info/warn/error。
+	Level string `json:"level"`
+	// Message 是事件内容。
+	Message string `json:"message"`
+}
+
+// addEvent 记录一条事件，仅保留最近 100 条。
+func (a *Agent) addEvent(level, format string, args ...any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, Event{
+		Time:    time.Now().Format("15:04:05"),
+		Level:   level,
+		Message: fmt.Sprintf(format, args...),
+	})
+	if len(a.events) > 100 {
+		a.events = a.events[len(a.events)-100:]
+	}
+}
+
+// Events 返回最近事件副本。
+func (a *Agent) Events() []Event {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]Event, len(a.events))
+	copy(out, a.events)
+	return out
+}
+
+// SetAuto 设置是否处于自动选路模式。
+func (a *Agent) SetAuto(v bool) {
+	a.mu.Lock()
+	a.auto = v
+	a.mu.Unlock()
+}
+
+// Auto 返回是否处于自动选路模式。
+func (a *Agent) Auto() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.auto
+}
+
+// fastest 返回测速最快的节点名。
+func (a *Agent) fastest(ctx context.Context) (string, bool) {
+	latencies := a.PingAll(ctx)
+	best := ""
+	var bestMs int64 = -1
+	for name, ms := range latencies {
+		if ms < 0 {
+			continue
+		}
+		if bestMs < 0 || ms < bestMs {
+			best, bestMs = name, ms
+		}
+	}
+	return best, best != ""
+}
+
+// pingTarget 返回用于测速的地址：主 IP 不通时依次尝试 backup_ips。
+func pingTarget(node api.VpnInfo) string {
+	for _, ip := range append([]string{node.IP}, node.BackupIPs...) {
+		if ip == "" {
+			continue
+		}
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(node.APIPort)), 800*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		return ip
+	}
+	return node.IP
 }
 
 // AutoSelect 启动自动选路：定时测速，连上最快节点；当前节点明显变慢时切换。
@@ -434,6 +544,9 @@ func (a *Agent) AutoSelect(ctx context.Context, interval time.Duration) {
 
 // autoRound 执行一轮"测速 + 择优 + 必要时切换"。
 func (a *Agent) autoRound(ctx context.Context) {
+	if !a.Auto() {
+		return
+	}
 	latencies := a.PingAll(ctx)
 	best := ""
 	var bestMs int64 = -1
@@ -450,7 +563,7 @@ func (a *Agent) autoRound(ctx context.Context) {
 	}
 	state := a.State()
 	if !state.Connected {
-		if err := a.Connect(ctx, best); err == nil {
+		if err := a.connectNode(ctx, best); err == nil {
 			fmt.Printf("自动选路: 连接 %s（%dms）\n", best, bestMs)
 		}
 		return
@@ -459,7 +572,7 @@ func (a *Agent) autoRound(ctx context.Context) {
 	// 当前节点不可达，或比最优慢 40% 以上且差距超过 30ms 时切换。
 	shouldSwitch := currentMs < 0 || (bestMs >= 0 && currentMs > bestMs+30 && int64(float64(bestMs)*1.4) < currentMs)
 	if shouldSwitch && best != state.Node {
-		if err := a.Connect(ctx, best); err == nil {
+		if err := a.connectNode(ctx, best); err == nil {
 			fmt.Printf("自动选路: %s(%dms) -> %s(%dms)\n", state.Node, currentMs, best, bestMs)
 		}
 	}
@@ -592,4 +705,41 @@ func nodeName(node api.VpnInfo) string {
 		return node.Name
 	}
 	return fmt.Sprintf("%s:%d", node.IP, node.VPNPort)
+}
+
+// Watchdog 周期性检查隧道健康：握手长时间没有更新就重连。
+//
+// 用于两种模式：自动模式下交给 AutoSelect 换节点，这里负责"同节点重建"，
+// 解决网关空闲切断后需要手动点连接的问题。
+func (a *Agent) Watchdog(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			st := a.Stats()
+			if !st.Connected {
+				continue
+			}
+			// 握手超过 90 秒没更新视为链路失效（keepalive 是 10 秒）。
+			if st.LastHandshake > 0 && time.Now().Unix()-st.LastHandshake > 90 {
+				a.addEvent("warn", "链路 %s 握手超时，准备重连", st.Node)
+				name := st.Node
+				if a.Auto() {
+					// 自动模式下重新选一次最快节点。
+					if best, ok := a.fastest(ctx); ok {
+						name = best
+					}
+				}
+				if err := a.connectNode(ctx, name); err != nil {
+					a.addEvent("error", "重连 %s 失败: %v", name, err)
+				}
+			}
+		}
+	}
 }

@@ -89,20 +89,18 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	defer startCancel()
 	ag := agent.New(startCtx, cfg, client)
 
-	switch {
-	case cfg.AutoMode:
+	mode := opts.AutoNode
+	if mode == "" {
+		mode = cfg.Mode
+	}
+	if mode == "auto" {
 		// 自动选路：后台定时测速并连接/切换到最快节点。
 		interval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
+		ag.SetAuto(true)
 		go ag.AutoSelect(runCtx, interval)
-	default:
-		autoNode := opts.AutoNode
-		if autoNode == "" {
-			autoNode = cfg.AutoNode
-		}
-		if autoNode != "" {
-			if err := ag.Connect(startCtx, autoNode); err != nil {
-				fmt.Printf("自动连接 %s 失败: %v\n", autoNode, err)
-			}
+	} else if mode != "" {
+		if err := ag.Connect(startCtx, mode); err != nil {
+			fmt.Printf("自动连接 %s 失败: %v\n", mode, err)
 		}
 	}
 
@@ -117,6 +115,8 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	if keepalive > 0 {
 		go ag.Keepalive(runCtx, keepalive)
 	}
+
+	go ag.Watchdog(runCtx, 30*time.Second)
 
 	proxyListen := firstNonEmpty(opts.ProxyListen, cfg.SocksListen, defaultProxyListen)
 	proxyLn, err := net.Listen("tcp", proxyListen)

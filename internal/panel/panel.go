@@ -50,6 +50,7 @@ func Handler(opts Options) http.Handler {
 			"logged_in":   opts.Agent.LoggedIn(),
 			"error":       opts.Agent.LastError(),
 			"mfa_pending": opts.Login.Pending(),
+			"mode":        opts.Agent.Mode(),
 		})
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, _ *http.Request) {
@@ -79,6 +80,9 @@ func Handler(opts Options) http.Handler {
 		}
 		writeJSON(w, out)
 	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, opts.Agent.Events())
+	})
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Stats())
 	})
@@ -88,9 +92,15 @@ func Handler(opts Options) http.Handler {
 		writeJSON(w, opts.Agent.LatencyAll(ctx))
 	})
 	mux.HandleFunc("/api/connect", func(w http.ResponseWriter, r *http.Request) {
-		if err := opts.Agent.Connect(r.Context(), r.URL.Query().Get("node")); err != nil {
+		name := r.URL.Query().Get("node")
+		if err := opts.Agent.Connect(r.Context(), name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// 记住用户选择，重启后沿用。
+		opts.Config.Mode = name
+		if err := opts.Config.Save(); err != nil {
+			fmt.Printf("保存连接模式失败: %v\n", err)
 		}
 		writeJSON(w, opts.Agent.State())
 	})
@@ -266,12 +276,8 @@ type settingsPayload struct {
 	ProxyListen *string `json:"proxy_listen"`
 	// PanelListen 是控制面板监听地址。
 	PanelListen *string `json:"panel_listen"`
-	// AutoMode 打开自动选路。
-	AutoMode *bool `json:"auto_mode"`
 	// AutoModeIntervalSeconds 是测速间隔（秒）。
 	AutoModeIntervalSeconds *int `json:"auto_mode_interval_seconds"`
-	// AutoNode 是启动时自动连接的节点。
-	AutoNode *string `json:"auto_node"`
 	// KeepaliveSeconds 是会话保活间隔（秒）。
 	KeepaliveSeconds *int `json:"keepalive_seconds"`
 	// SocksUser 与 SocksPass 是代理认证。
@@ -294,9 +300,7 @@ func currentSettings(cfg *config.Config) settingsPayload {
 	return settingsPayload{
 		ProxyListen:             &proxyListen,
 		PanelListen:             &panelListen,
-		AutoMode:                &cfg.AutoMode,
 		AutoModeIntervalSeconds: &cfg.AutoModeIntervalSeconds,
-		AutoNode:                &cfg.AutoNode,
 		KeepaliveSeconds:        &cfg.KeepaliveSeconds,
 		SocksUser:               &cfg.SocksUser,
 		SocksPass:               &cfg.SocksPass,
@@ -330,23 +334,12 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 			restart = append(restart, "panel_listen")
 		}
 	}
-	if in.AutoMode != nil && *in.AutoMode != cfg.AutoMode {
-		cfg.AutoMode = *in.AutoMode
-		restart = append(restart, "auto_mode")
-	}
 	if in.AutoModeIntervalSeconds != nil && *in.AutoModeIntervalSeconds != cfg.AutoModeIntervalSeconds {
 		if *in.AutoModeIntervalSeconds < 0 {
 			return nil, fmt.Errorf("自动选路间隔不能为负")
 		}
 		cfg.AutoModeIntervalSeconds = *in.AutoModeIntervalSeconds
 		restart = append(restart, "auto_mode_interval_seconds")
-	}
-	if in.AutoNode != nil {
-		v := strings.TrimSpace(*in.AutoNode)
-		if v != cfg.AutoNode {
-			cfg.AutoNode = v
-			restart = append(restart, "auto_node")
-		}
 	}
 	if in.KeepaliveSeconds != nil && *in.KeepaliveSeconds != cfg.KeepaliveSeconds {
 		if *in.KeepaliveSeconds < 0 {

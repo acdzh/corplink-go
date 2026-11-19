@@ -40,7 +40,7 @@
   <div class="row"><span class="dot" id="dot"></span><span id="state">未连接</span></div>
   <div class="muted" id="detail" style="margin-top:8px"></div>
   <div class="row" style="margin-top:12px">
-    <select id="node" style="min-width:240px"></select>
+    <select id="node" style="min-width:260px"></select>
     <button id="btnConnect">连接</button>
     <button class="ghost" id="btnDisconnect">断开</button>
     <button class="ghost" id="btnRefresh">刷新节点</button>
@@ -104,11 +104,7 @@
   <div class="row" style="gap:14px">
     <label class="muted">代理监听<input id="setProxy" style="display:block;width:190px;margin-top:4px"></label>
     <label class="muted">面板监听<input id="setPanel" style="display:block;width:190px;margin-top:4px"></label>
-    <label class="muted">自动选路<select id="setAutoMode" style="display:block;width:150px;margin-top:4px">
-      <option value="0">关闭（手动）</option><option value="1">开启（自动测速）</option>
-    </select></label>
-    <label class="muted">测速间隔(秒)<input id="setAutoInterval" type="number" style="display:block;width:130px;margin-top:4px"></label>
-    <label class="muted">自动连接节点<input id="setAutoNode" placeholder="留空不自动连" style="display:block;width:190px;margin-top:4px"></label>
+    <label class="muted">自动选路间隔(秒)<input id="setAutoInterval" type="number" style="display:block;width:150px;margin-top:4px"></label>
   </div>
   <div class="row" style="gap:14px;margin-top:12px">
     <label class="muted">保活(秒)<input id="setKeepalive" type="number" style="display:block;width:130px;margin-top:4px"></label>
@@ -183,7 +179,7 @@ async function refreshStatus() {
     : (s.connected
       ? ('隧道 ' + s.address + ' · 路由 ' + s.routes + ' 条 · DNS ' + (s.dns || []).join(', '))
       : '未建立隧道，代理端口会拒绝所有连接');
-  if (s.node && !selected) { selected = s.node; }
+  if (resp.mode === 'auto') { selected = 'auto'; } else if (s.node && !selected) { selected = s.node; }
 }
 
 async function refreshStats() {
@@ -210,18 +206,34 @@ async function refreshStats() {
     + (st.last_handshake ? ' · 最近握手 ' + new Date(st.last_handshake * 1000).toLocaleTimeString() : '');
 }
 
+function sortedNodes() {
+  // 有延迟数据时按延迟升序，没有时保持服务端顺序（与客户端展示一致）。
+  if (!Object.keys(latency).length) return nodes;
+  return [...nodes].sort((a, b) => {
+    const la = latency[a.name], lb = latency[b.name];
+    const va = la === undefined || la < 0 ? Number.MAX_SAFE_INTEGER : la;
+    const vb = lb === undefined || lb < 0 ? Number.MAX_SAFE_INTEGER : lb;
+    return va - vb;
+  });
+}
+
 function renderNodes() {
   const sel = $('node');
-  sel.innerHTML = nodes.map(n =>
-    '<option value="' + n.name + '">' + flagOf(n.name) + ' ' + n.name + '</option>').join('');
-  if (selected) sel.value = selected;
+  const list = sortedNodes();
+  const autoMs = Object.values(latency).filter(v => v >= 0).sort((a, b) => a - b)[0];
+  sel.innerHTML = '<option value="__auto__">🚀 自动（最快' + (autoMs !== undefined ? ' ' + autoMs + 'ms' : '') + '）</option>'
+    + list.map(n => '<option value="' + n.name + '">' + flagOf(n.name) + ' ' + n.name + '</option>').join('');
+  sel.value = selected === 'auto' ? '__auto__' : (selected || '');
   $('nodeCount').textContent = '共 ' + nodes.length + ' 个';
-  $('nodeTable').innerHTML = nodes.map(n => {
+  $('nodeTable').innerHTML = sortedNodes().map(n => {
     const ms = latency[n.name];
     const lat = ms === undefined ? '<span class="muted">-</span>'
       : (ms < 0 ? '<span class="muted">超时</span>' : ms + ' ms');
     const proto = n.protocol_mode === 1 ? 'TCP' : 'UDP';
-    const tag = n.tag ? '<span class="muted">' + n.tag + '</span>' : '';
+    const chips = [];
+    if (n.tag) chips.push(n.tag);
+    if (n.type) chips.push(n.type);
+    const tag = chips.length ? '<span class="muted">' + chips.join(' · ') + '</span>' : '';
     return '<tr><td class="flag">' + flagOf(n.name) + '</td><td>' + n.name +
       (n.domain_name ? ' <span class="muted">' + n.domain_name + '</span>' : '') + '</td><td>' + tag +
       '</td><td class="muted">' + proto + '</td><td>' + lat + '</td><td class="muted">' +
@@ -240,11 +252,12 @@ function pickNode(name) {
 }
 
 async function connect() {
-  const name = $('node').value;
+  const picked = $('node').value;
+  const name = picked === '__auto__' ? 'auto' : picked;
   $('btnConnect').disabled = true;
   try {
     await api('/api/connect?node=' + encodeURIComponent(name), { method: 'POST' });
-    selected = name;
+    selected = name === 'auto' ? 'auto' : name;
   } finally {
     $('btnConnect').disabled = false;
     refreshStatus();
@@ -290,8 +303,6 @@ async function loadSettings() {
   const s = await api('/api/settings');
   $('setProxy').value = s.proxy_listen || '';
   $('setPanel').value = s.panel_listen || '';
-  $('setAutoNode').value = s.auto_node || '';
-  $('setAutoMode').value = s.auto_mode ? '1' : '0';
   $('setAutoInterval').value = s.auto_mode_interval_seconds || 300;
   $('setKeepalive').value = s.keepalive_seconds || 0;
   $('setUser').value = s.socks5_username || '';
@@ -306,9 +317,7 @@ async function saveSettings() {
     body: JSON.stringify({
       proxy_listen: $('setProxy').value.trim(),
       panel_listen: $('setPanel').value.trim(),
-      auto_mode: $('setAutoMode').value === '1',
       auto_mode_interval_seconds: parseInt($('setAutoInterval').value || '300', 10),
-      auto_node: $('setAutoNode').value.trim(),
       keepalive_seconds: parseInt($('setKeepalive').value || '0', 10),
       socks5_username: $('setUser').value.trim(),
       socks5_password: $('setPass').value,
