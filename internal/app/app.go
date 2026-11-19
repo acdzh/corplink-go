@@ -124,16 +124,10 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	}()
 
 	panelListen := firstNonEmpty(opts.PanelListen, cfg.PanelListen, defaultPanelListen)
-	token, err := ensureToken(cfg)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	handler := panel.Handler(panel.Options{
 		Agent:     ag,
 		Login:     login.New(client, cfg, ag),
 		Config:    cfg,
-		Token:     token,
 		ProxyHost: proxyLn.Addr().(*net.TCPAddr).IP.String(),
 		ProxyPort: proxyLn.Addr().(*net.TCPAddr).Port,
 		PanelHost: panelListen,

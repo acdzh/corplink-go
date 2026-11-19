@@ -53,7 +53,7 @@ func runServe(args []string) error {
 	}
 	fmt.Printf("控制面板: http://%s\n", rt.PanelAddr)
 	fmt.Printf("代理端口: %s（SOCKS5 + HTTP 混合）\n", rt.ProxyAddr)
-	fmt.Printf("订阅地址: http://%s/sub/%s\n", rt.PanelAddr, cfg.SubToken)
+	fmt.Printf("订阅地址: http://%s/sub\n", rt.PanelAddr)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

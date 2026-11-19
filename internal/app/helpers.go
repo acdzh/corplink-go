@@ -1,8 +1,6 @@
 package app
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -43,22 +41,6 @@ func loadSession(client *api.Client, cfg *config.Config) error {
 		return fmt.Errorf("会话文件 %s 不存在（请先登录）", path)
 	}
 	return client.LoadCookies(path)
-}
-
-// ensureToken 复用或生成订阅 token。
-func ensureToken(cfg *config.Config) (string, error) {
-	if cfg.SubToken != "" {
-		return cfg.SubToken, nil
-	}
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("生成订阅 token: %w", err)
-	}
-	cfg.SubToken = hex.EncodeToString(buf)
-	if err := cfg.Save(); err != nil {
-		fmt.Printf("保存订阅 token 失败: %v\n", err)
-	}
-	return cfg.SubToken, nil
 }
 
 // 确保 sign 与 url 被引用（签名器签名需要 url.URL 类型）。

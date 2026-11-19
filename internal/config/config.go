@@ -72,8 +72,6 @@ type Config struct {
 	PanelListen string `json:"panel_listen,omitempty"`
 	// SubListen 保留旧字段，等价于 panel_listen。
 	SubListen string `json:"sub_listen,omitempty"`
-	// SubToken 是订阅路径里的随机标识，避免被扫描。
-	SubToken string `json:"sub_token,omitempty"`
 	// HealthURL 是隧道内用于探测连通性的地址。
 	HealthURL string `json:"health_url,omitempty"`
 	// PreferNode 是优先节点名，留空按延迟自动选。

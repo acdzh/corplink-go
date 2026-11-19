@@ -33,8 +33,6 @@ type Options struct {
 	Login *login.Service
 	// Config 是运行配置。
 	Config *config.Config
-	// Token 是订阅路径里的随机标识。
-	Token string
 	// ProxyHost 与 ProxyPort 是订阅里写的代理地址。
 	ProxyHost string
 	ProxyPort int
@@ -117,7 +115,7 @@ func Handler(opts Options) http.Handler {
 		}
 		writeJSON(w, map[string]int{"nodes": len(opts.Agent.Nodes())})
 	})
-	mux.HandleFunc("/sub/"+opts.Token, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/sub", func(w http.ResponseWriter, _ *http.Request) {
 		body := sub.Single(sub.SingleOptions{
 			Name:     "CORPLINK",
 			Host:     opts.ProxyHost,
@@ -243,7 +241,7 @@ func Handler(opts Options) http.Handler {
 	})
 	mux.HandleFunc("/api/sub", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{
-			"url": fmt.Sprintf("http://%s/sub/%s", opts.PanelHost, opts.Token),
+			"url": fmt.Sprintf("http://%s/sub", opts.PanelHost),
 		})
 	})
 
