@@ -16,8 +16,12 @@ const (
 	Title = "Corplink Go"
 	// ProxyName 是唯一代理名。
 	ProxyName = "CorpLink"
-	// Target 是规则指向的目标：直接指向唯一代理，不额外建组。
-	Target = ProxyName
+	// GroupName 是唯一选择组。
+	// 客户端（Clash Verge 等）的「代理组」页面只认 proxy-groups，
+	// 不建组会出现"未获取到代理信息"，所以保留一个组。
+	GroupName = "节点选择"
+	// Target 是规则指向的目标。
+	Target = GroupName
 )
 
 // Options 是生成订阅所需的输入。
@@ -56,6 +60,14 @@ func Clash(opts Options) string {
 
 	// DNS：fake-ip 让域名规则直接命中，不必依赖本机能否解析内网域名；
 	// 内网域名的真正解析发生在隧道内（由代理侧完成）。
+	b.WriteString("proxy-groups:\n")
+	fmt.Fprintf(&b, "  - name: %q\n", GroupName)
+	b.WriteString("    type: select\n")
+	b.WriteString("    proxies:\n")
+	fmt.Fprintf(&b, "      - %q\n", ProxyName)
+	b.WriteString("      - DIRECT\n")
+	b.WriteString("      - REJECT\n")
+
 	b.WriteString("dns:\n")
 	b.WriteString("  enable: true\n")
 	b.WriteString("  enhanced-mode: fake-ip\n")
