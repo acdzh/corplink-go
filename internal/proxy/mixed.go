@@ -192,9 +192,6 @@ func (s *Server) dial(ctx context.Context, host string, port int) (net.Conn, err
 	if err != nil {
 		return nil, err
 	}
-	if !tun.Allowed(addr) {
-		return nil, fmt.Errorf("%s 不在分流网段内", addr)
-	}
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 	return tun.DialContext(dialCtx, "tcp", net.JoinHostPort(addr.String(), strconv.Itoa(port)))

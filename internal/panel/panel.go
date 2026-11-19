@@ -126,7 +126,6 @@ func Handler(opts Options) http.Handler {
 			Password: opts.Config.SocksPass,
 			Routes:   opts.Agent.Routes(),
 			Domains:  opts.Agent.Domains(),
-			Full:     opts.Config.RouteMode == "full",
 		})
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		_, _ = w.Write([]byte(body))
@@ -278,8 +277,6 @@ type settingsPayload struct {
 	SocksPass *string `json:"socks5_password"`
 	// LogLevel 是日志级别。
 	LogLevel *string `json:"log_level"`
-	// RouteMode 是分流模式 split/full。
-	RouteMode *string `json:"route_mode"`
 }
 
 // currentSettings 返回可编辑的配置快照。
@@ -300,20 +297,11 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		SocksUser:        &cfg.SocksUser,
 		SocksPass:        &cfg.SocksPass,
 		LogLevel:         &cfg.LogLevel,
-		RouteMode:        ptr(routeModeOf(cfg)),
 	}
 }
 
 // ptr 返回字符串指针，便于构造部分更新字段。
 func ptr(v string) *string { return &v }
-
-// routeModeOf 返回生效的分流模式，缺省 split。
-func routeModeOf(cfg *config.Config) string {
-	if cfg.RouteMode == "full" {
-		return "full"
-	}
-	return "split"
-}
 
 // applySettings 校验并写入配置，返回需要重启才生效的字段名。
 func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
@@ -362,16 +350,6 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 		if v != "" && v != cfg.LogLevel {
 			cfg.LogLevel = v
 			restart = append(restart, "log_level")
-		}
-	}
-	if in.RouteMode != nil {
-		mode := strings.TrimSpace(*in.RouteMode)
-		if mode != "" && mode != cfg.RouteMode {
-			if mode != "split" && mode != "full" {
-				return nil, fmt.Errorf("分流模式只能是 split 或 full")
-			}
-			cfg.RouteMode = mode
-			restart = append(restart, "route_mode")
 		}
 	}
 	return restart, nil

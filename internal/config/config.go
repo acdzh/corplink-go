@@ -64,8 +64,6 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
-	// RouteMode 是分流模式：split 只走内网网段，full 走全量。
-	RouteMode string `json:"route_mode,omitempty"`
 	// AutoNode 是启动时自动连接的节点名，留空则不自动连接。
 	AutoNode string `json:"auto_node,omitempty"`
 	// KeepaliveSeconds 是会话保活间隔（秒），0 表示使用默认 1800。

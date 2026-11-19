@@ -111,9 +111,7 @@
     <label class="muted">代理用户名<input id="setUser" style="display:block;width:150px;margin-top:4px"></label>
     <label class="muted">代理密码<input id="setPass" type="password" style="display:block;width:150px;margin-top:4px"></label>
     <label class="muted">日志级别<input id="setLog" style="display:block;width:110px;margin-top:4px"></label>
-    <label class="muted">分流模式<select id="setRouteMode" style="display:block;width:130px;margin-top:4px">
-      <option value="split">仅内网</option><option value="full">全量</option>
-    </select></label>
+
   </div>
   <div class="row" style="margin-top:14px">
     <button id="btnSaveSettings">保存设置</button>
@@ -293,7 +291,6 @@ async function loadSettings() {
   $('setUser').value = s.socks5_username || '';
   $('setPass').value = s.socks5_password || '';
   $('setLog').value = s.log_level || '';
-  $('setRouteMode').value = s.route_mode || 'split';
 }
 
 async function saveSettings() {
@@ -308,7 +305,6 @@ async function saveSettings() {
       socks5_username: $('setUser').value.trim(),
       socks5_password: $('setPass').value,
       log_level: $('setLog').value.trim(),
-      route_mode: $('setRouteMode').value,
     }),
   });
   $('settingsTip').textContent = r.restart_required && r.restart_required.length

@@ -24,8 +24,6 @@ type SingleOptions struct {
 	// Routes 与 Domains 是分流规则来源。
 	Routes  []string
 	Domains []string
-	// Full 表示全量模式：未命中规则的流量也走代理。
-	Full bool
 }
 
 // Single 生成"只有一个代理"的订阅：切换节点由控制面板完成，Clash 侧保持稳定。
@@ -80,11 +78,7 @@ func Single(opts SingleOptions) string {
 		seen["domain:"+domain] = true
 		fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,%s\n", domain, group)
 	}
-	if opts.Full {
-		fmt.Fprintf(&b, "  - MATCH,%s\n", group)
-	} else {
-		b.WriteString("  - MATCH,DIRECT\n")
-	}
+	b.WriteString("  - MATCH,DIRECT\n")
 	return b.String()
 }
 
