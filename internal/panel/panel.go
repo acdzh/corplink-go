@@ -321,6 +321,12 @@ type settingsPayload struct {
 	SocksPass *string `json:"socks5_password"`
 	// LogLevel 是日志级别。
 	LogLevel *string `json:"log_level"`
+	// DeviceModel 与 DeviceBrand 影响 UA 与 query 上报。
+	DeviceModel *string `json:"device_model"`
+	DeviceBrand *string `json:"device_brand"`
+	// OSVersion 与 OSPatch 是系统 API level 与补丁日期。
+	OSVersion *string `json:"os_version"`
+	OSPatch   *string `json:"os_version_patch"`
 }
 
 // currentSettings 返回可编辑的配置快照。
@@ -341,6 +347,10 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		SocksUser:               &cfg.SocksUser,
 		SocksPass:               &cfg.SocksPass,
 		LogLevel:                &cfg.LogLevel,
+		DeviceModel:             &cfg.DeviceModel,
+		DeviceBrand:             &cfg.DeviceBrand,
+		OSVersion:               &cfg.OSVersion,
+		OSPatch:                 &cfg.OSPatch,
 	}
 }
 
@@ -394,6 +404,34 @@ func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
 		if v != "" && v != cfg.LogLevel {
 			cfg.LogLevel = v
 			restart = append(restart, "log_level")
+		}
+	}
+	if in.DeviceModel != nil {
+		v := strings.TrimSpace(*in.DeviceModel)
+		if v != "" && v != cfg.DeviceModel {
+			cfg.DeviceModel = v
+			restart = append(restart, "device_model")
+		}
+	}
+	if in.DeviceBrand != nil {
+		v := strings.TrimSpace(*in.DeviceBrand)
+		if v != "" && v != cfg.DeviceBrand {
+			cfg.DeviceBrand = v
+			restart = append(restart, "device_brand")
+		}
+	}
+	if in.OSVersion != nil {
+		v := strings.TrimSpace(*in.OSVersion)
+		if v != "" && v != cfg.OSVersion {
+			cfg.OSVersion = v
+			restart = append(restart, "os_version")
+		}
+	}
+	if in.OSPatch != nil {
+		v := strings.TrimSpace(*in.OSPatch)
+		if v != "" && v != cfg.OSPatch {
+			cfg.OSPatch = v
+			restart = append(restart, "os_version_patch")
 		}
 	}
 	return restart, nil

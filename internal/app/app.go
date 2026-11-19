@@ -71,6 +71,12 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("缺少配置")
 	}
+	if created, err := cfg.EnsureDeviceID(); err != nil {
+		fmt.Printf("生成 device_id 失败: %v\n", err)
+	} else if created {
+		fmt.Printf("已生成新的 device_id: %s\n", cfg.DeviceID)
+	}
+
 	client := opts.Client
 	if client == nil {
 		var err error

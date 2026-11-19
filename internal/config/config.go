@@ -5,6 +5,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,9 +96,9 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		DeviceName:  "corplink-go",
-		DeviceModel: "M2007J17C",
-		DeviceBrand: "Redmi",
-		OSVersion:   "32",
+		DeviceModel: "Pixel 7",
+		DeviceBrand: "google",
+		OSVersion:   "33",
 		OSPatch:     "2023-07-05",
 		AppVersion:  "3.3.24",
 		BuildNumber: "2485",
@@ -156,6 +158,26 @@ func (c *Config) SessionPath() string {
 		return "session.json"
 	}
 	return filepath.Join(filepath.Dir(c.path), "session.json")
+}
+
+// EnsureDeviceID 保证配置里有 device_id。
+//
+// 官方客户端的取值顺序是：本地存储 -> SHA1(android_id) -> 随机 UUID。
+// 我们没有 android_id，等价于客户端的兜底分支：生成一次随机 UUID（去掉横线），
+// 落盘后一直复用，这样每个部署实例都有独立设备标识。
+func (c *Config) EnsureDeviceID() (bool, error) {
+	if c.DeviceID != "" {
+		return false, nil
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return false, fmt.Errorf("生成 device_id: %w", err)
+	}
+	// RFC 4122 v4 变体位，保证是合法 UUID 形态，再去掉横线转小写。
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	c.DeviceID = hex.EncodeToString(buf)
+	return true, c.Save()
 }
 
 // Dir 返回数据目录（配置文件所在目录）。
