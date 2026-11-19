@@ -98,6 +98,14 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	// 启动只做两件事：拉节点、开始测速。连接一律等用户主动触发。
 	latencyInterval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
 	ag.PollLatency(runCtx, latencyInterval)
+	// 只有命令行显式指定 -name 时才在启动时连接：
+	// 多出口场景（比如一条隧道走 CN、一条走海外）需要第二个实例自动连线。
+	// 配置里的 mode 不触发连接，避免一开机就把代理建起来。
+	if opts.AutoNode != "" {
+		if err := ag.Connect(startCtx, opts.AutoNode); err != nil {
+			fmt.Printf("自动连接 %s 失败: %v\n", opts.AutoNode, err)
+		}
+	}
 	if cfg.Mode == "auto" {
 		ag.SetAuto(true)
 		go ag.AutoSelect(runCtx, latencyInterval)
