@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -160,8 +161,29 @@ func FetchExtra(rawURL string) ([]map[string]any, error) {
 	if strings.TrimSpace(rawURL) == "" {
 		return nil, nil
 	}
+
+	// 机场面板按查询参数或 UA 决定返回格式，显式要 Clash 格式最稳妥；
+	// UA 只作为兜底（有些面板只认 UA）。
+	reqURL := rawURL
+	if !strings.Contains(reqURL, "flag=") {
+		if strings.Contains(reqURL, "?") {
+			reqURL += "&flag=clash"
+		} else {
+			reqURL += "?flag=clash"
+		}
+	}
+
+	// 缓存 5 分钟：Clash 拉订阅可能很频繁，不必每次都打机场。
+	extraMu.Lock()
+	if cached, ok := extraCache[rawURL]; ok && time.Since(cached.at) < 5*time.Minute {
+		proxies := cached.proxies
+		extraMu.Unlock()
+		return proxies, nil
+	}
+	extraMu.Unlock()
+
 	client := &http.Client{Timeout: 20 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造额外订阅请求: %w", err)
 	}
@@ -210,10 +232,25 @@ func FetchExtra(rawURL string) ([]map[string]any, error) {
 			japan = append(japan, proxy)
 		}
 	}
-	if len(japan) == 0 {
-		return doc.Proxies, nil
+	result := japan
+	if len(result) == 0 {
+		result = doc.Proxies
 	}
-	return japan, nil
+	extraMu.Lock()
+	extraCache[rawURL] = extraEntry{at: time.Now(), proxies: result}
+	extraMu.Unlock()
+	return result, nil
+}
+
+var (
+	extraMu    sync.Mutex
+	extraCache = map[string]extraEntry{}
+)
+
+// extraEntry 是机场订阅的缓存条目。
+type extraEntry struct {
+	at      time.Time
+	proxies []map[string]any
 }
 
 // normalizeCIDR 把裸 IP 补成 CIDR，非法的返回空串。
