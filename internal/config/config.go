@@ -65,7 +65,9 @@ type Config struct {
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
 
-	// SubListen 是订阅与控制接口的监听地址。
+	// PanelListen 是控制面板监听地址。
+	PanelListen string `json:"panel_listen,omitempty"`
+	// SubListen 保留旧字段，等价于 panel_listen。
 	SubListen string `json:"sub_listen,omitempty"`
 	// SubToken 是订阅路径里的随机标识，避免被扫描。
 	SubToken string `json:"sub_token,omitempty"`
@@ -94,6 +96,7 @@ func Default() *Config {
 		AppVersion:  "3.3.24",
 		BuildNumber: "2485",
 		Language:    "zh",
+		PanelListen: "127.0.0.1:13140",
 		LogLevel:    "info",
 	}
 }
@@ -145,9 +148,35 @@ func (c *Config) Path() string { return c.path }
 // SessionPath 返回会话 Cookie 的落盘路径，与配置文件同目录，避免多份状态散落。
 func (c *Config) SessionPath() string {
 	if c.path == "" {
+		return "session.json"
+	}
+	return filepath.Join(filepath.Dir(c.path), "session.json")
+}
+
+// LegacySessionPath 返回旧版会话文件路径（<config>.cookies.json），用于兼容迁移。
+func (c *Config) LegacySessionPath() string {
+	if c.path == "" {
 		return "corplink.cookies.json"
 	}
 	return strings.TrimSuffix(c.path, ".json") + ".cookies.json"
+}
+
+// Dir 返回数据目录（配置文件所在目录）。
+func (c *Config) Dir() string {
+	if c.path == "" {
+		return "."
+	}
+	return filepath.Dir(c.path)
+}
+
+// LoadDir 从数据目录加载配置，目录内固定使用 config.json。
+//
+// 数据目录布局：config.json（非敏感）、session.json（Cookie）、totp.json（可选）。
+func LoadDir(dir string) (*Config, error) {
+	if dir == "" {
+		dir = "."
+	}
+	return Load(filepath.Join(dir, "config.json"))
 }
 
 // Meta 把配置里的客户端标识映射成请求参数；避免在多个包里重复拼装。

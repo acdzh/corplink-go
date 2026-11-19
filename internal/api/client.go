@@ -125,6 +125,16 @@ func withMetaDefaults(m Meta) Meta {
 }
 
 // SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
+// HasSession 判断 cookie jar 里是否已有登录会话。
+func (c *Client) HasSession() bool {
+	for _, ck := range c.Cookies() {
+		if ck.Name == "session" && ck.Value != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) SetSigner(s Signer) { c.signer = s }
 
 // Base 返回服务端根地址，便于日志与后续拼接。

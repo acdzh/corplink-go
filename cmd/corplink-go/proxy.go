@@ -50,7 +50,7 @@ func runProxy(args []string) error {
 	defer cancel()
 
 	apiClient := mustClient(cfg, *verbose)
-	if err := apiClient.LoadCookies(cfg.SessionPath()); err != nil {
+	if err := loadSession(apiClient, cfg); err != nil {
 		return fmt.Errorf("读取会话: %w", err)
 	}
 	nodes, err := fetchNodes(ctx, apiClient)

@@ -60,6 +60,7 @@ type Tunnel struct {
 	net    *netstack.Net
 	socks  *socks5.Server
 	listen net.Listener
+	routes []netip.Prefix
 }
 
 // Start 创建 netstack、启动 WireGuard 设备并对外提供 SOCKS5。
@@ -118,13 +119,32 @@ func Start(cfg Config) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("监听 SOCKS5 %s: %w", cfg.SocksListen, err)
 	}
-	t := &Tunnel{dev: dev, net: stack, socks: server, listen: ln}
+	t := &Tunnel{dev: dev, net: stack, socks: server, listen: ln, routes: parsePrefixes(cfg.AllowedIPs)}
 	go func() {
 		if err := server.Serve(ln); err != nil {
 			fmt.Printf("SOCKS5 服务退出: %v\n", err)
 		}
 	}()
 	return t, nil
+}
+
+// Routes 返回隧道分流网段。
+func (t *Tunnel) Routes() []string {
+	out := make([]string, 0, len(t.routes))
+	for _, p := range t.routes {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+// Allowed 判断地址是否落在分流网段内。
+func (t *Tunnel) Allowed(addr netip.Addr) bool {
+	for _, p := range t.routes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // SocksAddr 返回 SOCKS5 实际监听地址（监听 0 端口时可拿到动态端口）。
@@ -265,4 +285,26 @@ func parseAddrs(values []string) ([]netip.Addr, error) {
 		out = append(out, addr)
 	}
 	return out, nil
+}
+
+// parsePrefixes 把路由字符串解析成前缀列表，非法项忽略。
+func parsePrefixes(routes []string) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(routes))
+	for _, route := range routes {
+		route = strings.TrimSpace(route)
+		if route == "" {
+			continue
+		}
+		if !strings.Contains(route, "/") {
+			if strings.Contains(route, ":") {
+				route += "/128"
+			} else {
+				route += "/32"
+			}
+		}
+		if prefix, err := netip.ParsePrefix(route); err == nil {
+			out = append(out, prefix)
+		}
+	}
+	return out
 }

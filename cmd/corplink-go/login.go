@@ -70,7 +70,7 @@ func runLogin(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.LoadCookies(cfg.SessionPath()); err != nil {
+	if err := loadSession(client, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "警告: 读取历史会话失败:", err)
 	}
 	svc := auth.NewService(client)

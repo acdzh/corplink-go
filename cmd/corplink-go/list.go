@@ -30,7 +30,7 @@ func runList(args []string) error {
 		return err
 	}
 	client := mustClient(cfg, *verbose)
-	if err := client.LoadCookies(cfg.SessionPath()); err != nil {
+	if err := loadSession(client, cfg); err != nil {
 		return fmt.Errorf("读取会话: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)

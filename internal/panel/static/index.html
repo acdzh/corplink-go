@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CorpLink Go</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+         background:#0f1115; color:#e5e7eb; }
+  .card { max-width:760px; margin:0 auto 16px; background:#171a21; border:1px solid #262b36;
+          border-radius:12px; padding:18px; }
+  h1 { font-size:16px; margin:0 0 14px; font-weight:600; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#6b7280; }
+  .dot.on { background:#22c55e; }
+  button { background:#2563eb; border:0; color:#fff; padding:8px 14px; border-radius:8px;
+           font-size:13px; cursor:pointer; }
+  button.ghost { background:#374151; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  select, input { background:#0f1115; color:#e5e7eb; border:1px solid #333a48; border-radius:8px;
+                  padding:8px; font-size:13px; }
+  .muted { color:#9ca3af; font-size:12px; }
+  code { background:#0f1115; padding:3px 8px; border-radius:6px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:6px 4px; border-bottom:1px solid #232833; }
+  tr:last-child td { border-bottom:0; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>连接状态</h1>
+  <div class="row"><span class="dot" id="dot"></span><span id="state">未连接</span></div>
+  <div class="muted" id="detail" style="margin-top:10px"></div>
+  <div class="row" style="margin-top:14px">
+    <select id="node" style="min-width:240px"></select>
+    <button id="btnConnect">连接</button>
+    <button class="ghost" id="btnDisconnect">断开</button>
+    <button class="ghost" id="btnLatency">测延迟</button>
+    <button class="ghost" id="btnRefresh">刷新节点</button>
+  </div>
+</div>
+
+<div class="card">
+  <h1>二次验证 (TOTP)</h1>
+  <div class="row">
+    <span id="totpCode" style="font-size:26px;font-family:ui-monospace,monospace;letter-spacing:3px">------</span>
+    <span class="muted" id="totpTip">读取中…</span>
+  </div>
+  <div class="muted" style="margin-top:8px">登录时若服务端要求 2FA，可直接用这个码；剩余秒数实时刷新。</div>
+</div>
+
+<div class="card">
+  <h1>订阅</h1>
+  <div class="muted">填进 Clash Verge 即可；切换节点只影响这一条链路。</div>
+  <div class="row" style="margin-top:10px">
+    <code id="sub" style="flex:1;overflow:auto;white-space:nowrap;padding:8px"></code>
+    <button class="ghost" id="btnCopy">复制</button>
+  </div>
+</div>
+
+<div class="card">
+  <h1>节点</h1>
+  <div class="muted" id="nodeCount"></div>
+  <table id="nodeTable"></table>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function refreshStatus() {
+  const resp = await api('/api/status');
+  const s = resp.state;
+  $('dot').className = 'dot' + (s.connected ? ' on' : '');
+  $('state').textContent = s.connected ? ('已连接 ' + s.node) : '未连接';
+  $('detail').textContent = resp.error
+    ? ('未登录或会话过期：' + resp.error)
+    : (s.connected
+      ? ('隧道 ' + s.address + ' · 路由 ' + s.routes + ' 条 · DNS ' + (s.dns || []).join(', ') + ' · 起始 ' + s.since)
+      : '未建立隧道，代理端口会拒绝所有连接');
+}
+
+async function loadNodes() {
+  const nodes = await api('/api/nodes');
+  $('nodeCount').textContent = '共 ' + nodes.length + ' 个节点';
+  $('node').innerHTML = nodes.map(n =>
+    '<option value="' + n.name + '">' + n.name + ' (' + n.ip + ')</option>').join('');
+  $('nodeTable').innerHTML = nodes.slice(0, 50).map(n =>
+    '<tr><td>' + n.name + '</td><td class="muted">' + n.ip + '</td><td class="muted">protocol ' + n.protocol_mode + '</td></tr>').join('');
+}
+
+async function connect() {
+  const name = $('node').value;
+  $('btnConnect').disabled = true;
+  try {
+    await api('/api/connect?node=' + encodeURIComponent(name), { method: 'POST' });
+  } finally {
+    $('btnConnect').disabled = false;
+    refreshStatus();
+  }
+}
+
+async function disconnect() {
+  await api('/api/disconnect', { method: 'POST' });
+  refreshStatus();
+}
+
+async function latency() {
+  const name = $('node').value;
+  const r = await api('/api/latency?node=' + encodeURIComponent(name));
+  $('detail').textContent = name + ' API 延迟 ' + r.ms + 'ms';
+}
+
+async function refreshNodes() {
+  const r = await api('/api/refresh', { method: 'POST' });
+  await loadNodes();
+refreshTotp();
+setInterval(refreshTotp, 1000);
+  $('nodeCount').textContent = '共 ' + r.nodes + ' 个节点（已刷新）';
+}
+
+async function refreshTotp() {
+  try {
+    const t = await api('/api/totp');
+    if (!t.has_secret) {
+      $('totpCode').textContent = '------';
+      $('totpTip').textContent = '未保存 TOTP secret（登录一次即可获取）';
+      return;
+    }
+    $('totpCode').textContent = t.code;
+    $('totpTip').textContent = '剩余 ' + t.remaining + 's';
+  } catch (e) {
+    $('totpTip').textContent = '读取失败';
+  }
+}
+
+async function loadSub() {
+  const r = await api('/api/sub');
+  $('sub').textContent = r.url;
+}
+
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = disconnect;
+$('btnLatency').onclick = latency;
+$('btnRefresh').onclick = refreshNodes;
+$('btnCopy').onclick = () => navigator.clipboard.writeText($('sub').textContent);
+
+loadNodes();
+loadSub();
+refreshStatus();
+setInterval(refreshStatus, 3000);
+</script>
+</body>
+</html>

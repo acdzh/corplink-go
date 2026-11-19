@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"os"
 
 	"github.com/acdzh/corplink-go/internal/api"
 	"github.com/acdzh/corplink-go/internal/config"
@@ -44,4 +45,28 @@ func mustClient(cfg *config.Config, verbose bool) *api.Client {
 		panic(fmt.Sprintf("构造客户端失败: %v", err))
 	}
 	return client
+}
+
+// loadSession 读取会话，兼容旧版路径；读到旧文件时顺带迁移到新路径。
+//
+// LoadCookies 在文件不存在时返回 nil（调用方可能只是想恢复可选状态），
+// 所以这里必须先确认文件存在，否则会误以为已加载。
+func loadSession(client *api.Client, cfg *config.Config) error {
+	if _, err := os.Stat(cfg.SessionPath()); err == nil {
+		return client.LoadCookies(cfg.SessionPath())
+	}
+	legacy := cfg.LegacySessionPath()
+	if legacy == cfg.SessionPath() {
+		return fmt.Errorf("会话文件不存在（请先登录）")
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return fmt.Errorf("会话文件不存在（请先登录）")
+	}
+	if err := client.LoadCookies(legacy); err != nil {
+		return err
+	}
+	if err := client.SaveCookies(cfg.SessionPath()); err == nil {
+		fmt.Printf("已把旧会话迁移到 %s\n", cfg.SessionPath())
+	}
+	return nil
 }
