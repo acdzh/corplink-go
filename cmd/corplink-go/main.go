@@ -51,11 +51,6 @@ func main() {
 			fmt.Fprintln(os.Stderr, "connect 失败:", err)
 			os.Exit(1)
 		}
-	case "paths":
-		if err := runPaths(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "paths 失败:", err)
-			os.Exit(1)
-		}
 	case "serve":
 		if err := runServe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "serve 失败:", err)
@@ -77,7 +72,6 @@ func usage() {
   corplink-go probe  [-config ./config.json] [-v]
   corplink-go login  [-config ./config.json] [-alias lark] [-callback <URL>] [-v]
   corplink-go list   [-config <path>] [-v]
-  corplink-go paths  查看数据目录与端口
   corplink-go connect [-config ./config.json] [-v]
   corplink-go serve  [-config ./config.json] [-listen 127.0.0.1:8081] [-port-base 12001] [-max-tunnels 2]
   corplink-go version
