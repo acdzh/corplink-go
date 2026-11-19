@@ -17,6 +17,7 @@ import (
 
 	"github.com/acdzh/corplink-go/internal/agent"
 	"github.com/acdzh/corplink-go/internal/config"
+	"github.com/acdzh/corplink-go/internal/login"
 	"github.com/acdzh/corplink-go/internal/sub"
 	"github.com/acdzh/corplink-go/internal/totp"
 )
@@ -28,6 +29,8 @@ var assets embed.FS
 type Options struct {
 	// Agent 是隧道管理器。
 	Agent *agent.Agent
+	// Login 是登录流程服务。
+	Login *login.Service
 	// Config 是运行配置。
 	Config *config.Config
 	// Token 是订阅路径里的随机标识。
@@ -45,9 +48,10 @@ func Handler(opts Options) http.Handler {
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
-			"state":     opts.Agent.State(),
-			"logged_in": opts.Agent.LoggedIn(),
-			"error":     opts.Agent.LastError(),
+			"state":       opts.Agent.State(),
+			"logged_in":   opts.Agent.LoggedIn(),
+			"error":       opts.Agent.LastError(),
+			"mfa_pending": opts.Login.Pending(),
 		})
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, _ *http.Request) {
@@ -110,6 +114,77 @@ func Handler(opts Options) http.Handler {
 		})
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		_, _ = w.Write([]byte(body))
+	})
+	mux.HandleFunc("/api/login/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		url, err := opts.Login.Start(r.Context(), r.URL.Query().Get("alias"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"url": url})
+	})
+	mux.HandleFunc("/api/login/callback", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			Callback string `json:"callback"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "解析请求体: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		result, err := opts.Login.Callback(r.Context(), in.Callback)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, result)
+	})
+	mux.HandleFunc("/api/login/mfa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "解析请求体: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		code := strings.TrimSpace(in.Code)
+		if code == "" && opts.Config.Code != "" {
+			// 未填写时用已保存的 TOTP secret 自动生成。
+			generated, _, err := totp.Code(opts.Config.Code, time.Now())
+			if err != nil {
+				http.Error(w, "生成 TOTP: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			code = generated
+		}
+		result, err := opts.Login.MFA(r.Context(), code)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, result)
+	})
+	mux.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := opts.Login.Logout(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]bool{"logged_in": false})
 	})
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

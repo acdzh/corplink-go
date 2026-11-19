@@ -15,6 +15,7 @@ import (
 
 	"github.com/acdzh/corplink-go/internal/agent"
 	"github.com/acdzh/corplink-go/internal/config"
+	"github.com/acdzh/corplink-go/internal/login"
 	"github.com/acdzh/corplink-go/internal/panel"
 	"github.com/acdzh/corplink-go/internal/proxy"
 )
@@ -111,8 +112,10 @@ func runServe(args []string) error {
 	}
 	proxyPort := proxyLn.Addr().(*net.TCPAddr).Port
 
+	loginSvc := login.New(client, cfg, ag)
 	handler := panel.Handler(panel.Options{
 		Agent:     ag,
+		Login:     loginSvc,
 		Config:    cfg,
 		Token:     token,
 		ProxyHost: proxyHost,

@@ -43,6 +43,27 @@
 </div>
 
 <div class="card">
+  <h1>登录</h1>
+  <div class="row"><span class="muted" id="loginState">检查中…</span></div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnLogin">获取授权链接</button>
+    <a id="loginLink" href="#" target="_blank" class="muted" style="display:none">打开授权页 ↗</a>
+    <button class="ghost" id="btnLogout">退出登录</button>
+  </div>
+  <div id="loginStep2" style="display:none;margin-top:12px">
+    <input id="callback" placeholder="授权完成后，把浏览器地址栏的 corplink://... 或 device-callback 地址粘到这里" style="width:100%">
+    <div class="row" style="margin-top:8px"><button id="btnCallback">提交回调</button></div>
+  </div>
+  <div id="loginStep3" style="display:none;margin-top:12px">
+    <div class="row">
+      <input id="mfaCode" placeholder="2FA 验证码（留空用已保存的 TOTP 自动填）" style="flex:1">
+      <button id="btnMfa">提交验证码</button>
+    </div>
+  </div>
+  <div class="muted" id="loginTip" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
   <h1>设置</h1>
   <div class="row" style="gap:14px">
     <label class="muted">代理监听<input id="setProxy" style="display:block;width:200px;margin-top:4px"></label>
@@ -99,7 +120,10 @@ async function refreshStatus() {
   const s = resp.state;
   $('dot').className = 'dot' + (s.connected ? ' on' : '');
   $('state').textContent = s.connected ? ('已连接 ' + s.node) : '未连接';
-  $('detail').textContent = resp.error
+  $('loginState').textContent = resp.logged_in
+    ? '已登录' + (resp.mfa_pending ? '（等待二次验证）' : '')
+    : '未登录 / 会话已失效';
+  $('detail').textContent = resp.error;
     ? ('未登录或会话过期：' + resp.error)
     : (s.connected
       ? ('隧道 ' + s.address + ' · 路由 ' + s.routes + ' 条 · DNS ' + (s.dns || []).join(', ') + ' · 起始 ' + s.since)
@@ -204,6 +228,69 @@ async function saveSettings() {
 }
 
 $('btnSaveSettings').onclick = saveSettings;
+
+async function startLogin() {
+  const r = await api('/api/login/start', { method: 'POST' });
+  const link = $('loginLink');
+  link.href = r.url;
+  link.style.display = 'inline';
+  link.textContent = '打开授权页 ↗';
+  $('loginStep2').style.display = 'block';
+  $('loginTip').textContent = '先点「打开授权页」完成 SSO，再把回调地址粘回来。';
+}
+
+async function submitCallback() {
+  const callback = $('callback').value.trim();
+  if (!callback) return;
+  try {
+    const r = await api('/api/login/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback }),
+    });
+    if (r.mfa_required) {
+      $('loginStep3').style.display = 'block';
+      $('loginTip').textContent = '服务端要求二次验证，可用 TOTP 自动填。';
+      return;
+    }
+    $('loginTip').textContent = '登录成功，节点 ' + (r.nodes || 0) + ' 个';
+    $('loginStep2').style.display = 'none';
+    $('loginStep3').style.display = 'none';
+    loadNodes();
+    refreshStatus();
+  } catch (e) {
+    $('loginTip').textContent = '回调失败：' + e.message;
+  }
+}
+
+async function submitMfa() {
+  try {
+    const r = await api('/api/login/mfa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: $('mfaCode').value.trim() }),
+    });
+    $('loginTip').textContent = '登录成功，节点 ' + (r.nodes || 0) + ' 个';
+    $('loginStep2').style.display = 'none';
+    $('loginStep3').style.display = 'none';
+    loadNodes();
+    refreshStatus();
+  } catch (e) {
+    $('loginTip').textContent = '验证失败：' + e.message;
+  }
+}
+
+async function logout() {
+  await api('/api/logout', { method: 'POST' });
+  $('loginTip').textContent = '已退出登录';
+  loadNodes();
+  refreshStatus();
+}
+
+$('btnLogin').onclick = startLogin;
+$('btnCallback').onclick = submitCallback;
+$('btnMfa').onclick = submitMfa;
+$('btnLogout').onclick = logout;
 
 loadNodes();
 loadSub();

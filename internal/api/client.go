@@ -146,6 +146,17 @@ func (c *Client) Cookies() []*http.Cookie { return c.http.Jar.Cookies(c.base) }
 // SetCookies 注入已持久化的会话 Cookie。
 func (c *Client) SetCookies(cookies []*http.Cookie) { c.http.Jar.SetCookies(c.base, cookies) }
 
+// ClearCookies 清空 cookie jar（退出登录）。
+func (c *Client) ClearCookies() {
+	// 标准库 jar 没有清空接口，用一组过期 Cookie 覆盖即可。
+	cookies := c.Cookies()
+	for _, ck := range cookies {
+		ck.Value = ""
+		ck.MaxAge = -1
+	}
+	c.http.Jar.SetCookies(c.base, cookies)
+}
+
 // Do 发送一次接口请求并解析统一响应外壳。
 func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any) (*Envelope, error) {
 	u := *c.base

@@ -1,0 +1,11 @@
+services:
+  corplink:
+    image: ghcr.io/acdzh/corplink-go:latest
+    container_name: corplink-go
+    restart: unless-stopped
+    ports:
+      - "3710:3710"     # 混合代理（SOCKS5 + HTTP），仅打算给本机用时改成 127.0.0.1:3710:3710
+      - "13140:13140"   # 控制面板
+    volumes:
+      - ./data:/data
+    # 首次启动前把 config.json 与 session.json 放进 ./data
