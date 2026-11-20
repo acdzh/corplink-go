@@ -51,7 +51,7 @@ func Clash(opts Options) string {
 	}
 
 	proxy := map[string]any{
-		"name":   ProxyName,
+		"name":   &yaml.Node{Kind: yaml.ScalarNode, Style: yaml.DoubleQuotedStyle, Value: ProxyName},
 		"type":   "socks5",
 		"server": host,
 		"port":   opts.Port,

@@ -69,11 +69,11 @@ func main() {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `用法:
-  corplink-go probe  [-config ./config.json] [-v]
-  corplink-go login  [-config ./config.json] [-alias lark] [-callback <URL>] [-v]
-  corplink-go list   [-config <path>] [-v]
-  corplink-go connect [-config ./config.json] [-v]
-  corplink-go serve  [-config ./config.json] [-listen 127.0.0.1:8081] [-port-base 12001] [-max-tunnels 2]
+  corplink-go probe   [-config <path>] [-v]
+  corplink-go login   [-config <path>] [-alias lark] [-callback <URL>] [-v]
+  corplink-go list    [-config <path>] [-v]
+  corplink-go connect [-config <path>] [-name <node>] [-v]
+  corplink-go serve   [-config <path>] [-proxy 127.0.0.1:3710] [-panel 127.0.0.1:13140] [-name <node>] [-keepalive 30m] [-v]
   corplink-go version
 `)
 }

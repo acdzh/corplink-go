@@ -77,11 +77,30 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 		fmt.Printf("已生成新的 device_id: %s\n", cfg.DeviceID)
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
+	startCtx, startCancel := context.WithTimeout(runCtx, startupTimeout)
+	defer startCancel()
+
+	var matchErr error
+	if cfg.Server == "" && cfg.CompanyName != "" {
+		info, err := api.MatchCompany(startCtx, cfg.CompanyName)
+		if err != nil {
+			matchErr = err
+			fmt.Printf("解析企业代码 %q 失败: %v\n", cfg.CompanyName, err)
+		} else {
+			cfg.Server = info.Domain
+			if saveErr := cfg.Save(); saveErr != nil {
+				fmt.Printf("保存企业服务端配置失败: %v\n", saveErr)
+			}
+		}
+	}
+
 	client := opts.Client
 	if client == nil {
 		var err error
 		client, err = newClient(cfg, opts.Verbose)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 	}
@@ -90,10 +109,10 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 		fmt.Printf("提示: %v\n", err)
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
-	startCtx, startCancel := context.WithTimeout(runCtx, startupTimeout)
-	defer startCancel()
 	ag := agent.New(startCtx, cfg, client)
+	if matchErr != nil {
+		ag.LogEvent("warn", "解析企业代码 %s 失败: %v", cfg.CompanyName, matchErr)
+	}
 
 	// 启动只做两件事：拉节点、开始测速。连接一律等用户主动触发。
 	latencyInterval := time.Duration(cfg.AutoModeIntervalSeconds) * time.Second
@@ -108,8 +127,8 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if cfg.Mode == "auto" {
 		ag.SetAuto(true)
-		go ag.AutoSelect(runCtx, latencyInterval)
 	}
+	go ag.AutoSelect(runCtx, latencyInterval)
 
 	keepalive := opts.Keepalive
 	if keepalive == 0 {
@@ -132,15 +151,16 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("监听代理端口 %s: %w", proxyListen, err)
 	}
 	go func() {
-		if err := proxy.New(ag).Serve(proxyLn); err != nil && runCtx.Err() == nil {
+		if err := proxy.New(ag, cfg).Serve(proxyLn); err != nil && runCtx.Err() == nil {
 			fmt.Printf("代理服务退出: %v\n", err)
 		}
 	}()
 
+	loginSvc := login.New(client, cfg, ag)
 	panelListen := firstNonEmpty(opts.PanelListen, cfg.PanelListen, defaultPanelListen)
 	handler := panel.Handler(panel.Options{
 		Agent:     ag,
-		Login:     login.New(client, cfg, ag),
+		Login:     loginSvc,
 		Client:    client,
 		Config:    cfg,
 		ProxyHost: proxyLn.Addr().(*net.TCPAddr).IP.String(),
@@ -156,7 +176,7 @@ func Run(ctx context.Context, opts Options) (*Runtime, error) {
 
 	return &Runtime{
 		Agent:     ag,
-		Login:     login.New(client, cfg, ag),
+		Login:     loginSvc,
 		ProxyAddr: proxyListen,
 		PanelAddr: panelListen,
 		Client:    client,

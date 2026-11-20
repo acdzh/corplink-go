@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"net/url"
 	neturl "net/url"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/acdzh/corplink-go/internal/api"
 	"github.com/acdzh/corplink-go/internal/config"
 	"github.com/acdzh/corplink-go/internal/login"
+	"github.com/acdzh/corplink-go/internal/sign"
 	"github.com/acdzh/corplink-go/internal/sub"
 	"github.com/acdzh/corplink-go/internal/totp"
 )
@@ -52,11 +52,31 @@ func Handler(opts Options) http.Handler {
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
-			"state":       opts.Agent.State(),
-			"logged_in":   opts.Agent.LoggedIn(),
-			"error":       opts.Agent.LastError(),
-			"mfa_pending": opts.Login.Pending(),
-			"mode":        opts.Agent.Mode(),
+			"state":        opts.Agent.State(),
+			"logged_in":    opts.Agent.LoggedIn(),
+			"error":        opts.Agent.LastError(),
+			"mfa_pending":  opts.Login.Pending(),
+			"mode":         opts.Agent.Mode(),
+			"auto":         opts.Agent.Auto(),
+			"company_name": opts.Config.CompanyName,
+			"server":       opts.Config.Server,
+			"proxy_addr":   fmt.Sprintf("%s:%d", opts.ProxyHost, opts.ProxyPort),
+			"panel_addr":   opts.PanelHost,
+			"has_totp":     opts.Config.Code != "",
+		})
+	})
+	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, _ *http.Request) {
+		routes := opts.Agent.Routes()
+		if routes == nil {
+			routes = []string{}
+		}
+		domains := opts.Agent.Domains()
+		if domains == nil {
+			domains = []string{}
+		}
+		writeJSON(w, map[string]any{
+			"routes":  routes,
+			"domains": domains,
 		})
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, _ *http.Request) {
@@ -106,8 +126,21 @@ func Handler(opts Options) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(data)
 	})
-	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, opts.Agent.Events())
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete || (r.Method == http.MethodPost && r.URL.Query().Get("action") == "clear") {
+			opts.Agent.ClearEvents()
+			writeJSON(w, map[string]bool{"cleared": true})
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "只支持 GET/DELETE/POST", http.StatusMethodNotAllowed)
+			return
+		}
+		events := opts.Agent.Events()
+		if events == nil {
+			events = []agent.Event{}
+		}
+		writeJSON(w, events)
 	})
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, opts.Agent.Stats())
@@ -119,7 +152,7 @@ func Handler(opts Options) http.Handler {
 	mux.HandleFunc("/api/latency/all", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		writeJSON(w, opts.Agent.LatencyAll(ctx))
+		writeJSON(w, opts.Agent.PingAll(ctx))
 	})
 	mux.HandleFunc("/api/connect", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("node")
@@ -139,9 +172,9 @@ func Handler(opts Options) http.Handler {
 		writeJSON(w, opts.Agent.State())
 	})
 	mux.HandleFunc("/api/latency", func(w http.ResponseWriter, r *http.Request) {
-		ms, err := opts.Agent.Latency(r.Context(), r.URL.Query().Get("node"))
+		ms, err := opts.Agent.Ping(r.Context(), r.URL.Query().Get("node"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, map[string]int64{"ms": ms})
@@ -180,17 +213,29 @@ func Handler(opts Options) http.Handler {
 		writeSubscription(w, body)
 	})
 
+	mux.HandleFunc("/api/login/methods", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "只支持 GET", http.StatusMethodNotAllowed)
+			return
+		}
+		methods, err := opts.Login.Methods(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{"methods": methods})
+	})
 	mux.HandleFunc("/api/login/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
 			return
 		}
-		url, err := opts.Login.Start(r.Context(), r.URL.Query().Get("alias"))
+		info, err := opts.Login.StartWithInfo(r.Context(), r.URL.Query().Get("alias"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]string{"url": url})
+		writeJSON(w, info)
 	})
 	mux.HandleFunc("/api/login/callback", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -210,6 +255,23 @@ func Handler(opts Options) http.Handler {
 			return
 		}
 		writeJSON(w, result)
+	})
+	mux.HandleFunc("/api/login/mfa/send", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			Type string `json:"type"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&in)
+		}
+		if err := opts.Login.SendMFA(r.Context(), strings.TrimSpace(in.Type)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]bool{"sent": true})
 	})
 	mux.HandleFunc("/api/login/mfa", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -265,7 +327,7 @@ func Handler(opts Options) http.Handler {
 			http.Error(w, "解析请求体: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		restart, err := applySettings(opts.Config, in)
+		restart, err := applySettings(r.Context(), opts.Client, opts.Config, in)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -274,9 +336,12 @@ func Handler(opts Options) http.Handler {
 			http.Error(w, "保存配置: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		opts.Agent.LogEvent("info", "已保存系统配置")
 		writeJSON(w, map[string]any{
 			"saved":            true,
 			"restart_required": restart,
+			"company_name":     opts.Config.CompanyName,
+			"server":           opts.Config.Server,
 		})
 	})
 	mux.HandleFunc("/api/totp", func(w http.ResponseWriter, _ *http.Request) {
@@ -309,7 +374,7 @@ func writeSubscription(w http.ResponseWriter, body string) {
 	name := sub.Title
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(name)))
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+neturl.PathEscape(name))
 	w.Header().Set("Profile-Update-Interval", "24")
 	w.Header().Set("Cache-Control", "private, no-cache, no-transform")
 	_, _ = w.Write([]byte(body))
@@ -322,10 +387,15 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // settingsPayload 是面板提交的配置字段。
-// settingsPayload 是面板提交的配置字段。
 //
 // 字段用指针：区分"没提交"和"提交了空值"，避免部分更新把其他项清空。
 type settingsPayload struct {
+	// CompanyName 是企业标识，用于解析服务端地址。
+	CompanyName *string `json:"company_name"`
+	// Server 是企业服务端地址，留空可由企业代码自动解析。
+	Server *string `json:"server"`
+	// ActivateCode 是设备激活标识。
+	ActivateCode *string `json:"activate_code"`
 	// ProxyListen 是混合代理监听地址。
 	ProxyListen *string `json:"proxy_listen"`
 	// PanelListen 是控制面板监听地址。
@@ -358,6 +428,9 @@ func currentSettings(cfg *config.Config) settingsPayload {
 		panelListen = "127.0.0.1:13140"
 	}
 	return settingsPayload{
+		CompanyName:             &cfg.CompanyName,
+		Server:                  &cfg.Server,
+		ActivateCode:            &cfg.ActivateCode,
 		ProxyListen:             &proxyListen,
 		PanelListen:             &panelListen,
 		AutoModeIntervalSeconds: &cfg.AutoModeIntervalSeconds,
@@ -373,11 +446,48 @@ func currentSettings(cfg *config.Config) settingsPayload {
 }
 
 // ptr 返回字符串指针，便于构造部分更新字段。
-func ptr(v string) *string { return &v }
+func ptr(v string) *string {
+	return &v
+}
 
 // applySettings 校验并写入配置，返回需要重启才生效的字段名。
-func applySettings(cfg *config.Config, in settingsPayload) ([]string, error) {
+func applySettings(ctx context.Context, client *api.Client, cfg *config.Config, in settingsPayload) ([]string, error) {
 	restart := make([]string, 0, 4)
+	oldCompany := cfg.CompanyName
+	oldServer := cfg.Server
+	oldActivate := cfg.ActivateCode
+
+	if in.CompanyName != nil {
+		cfg.CompanyName = strings.TrimSpace(*in.CompanyName)
+	}
+	if in.Server != nil {
+		cfg.Server = strings.TrimSpace(*in.Server)
+	}
+	if in.ActivateCode != nil {
+		cfg.ActivateCode = strings.TrimSpace(*in.ActivateCode)
+	}
+	companyChanged := cfg.CompanyName != oldCompany
+	serverNotManuallyChanged := in.Server == nil || strings.TrimSpace(*in.Server) == oldServer
+	if cfg.CompanyName != "" && (cfg.Server == "" || (companyChanged && serverNotManuallyChanged)) {
+		info, err := api.MatchCompany(ctx, cfg.CompanyName)
+		if err != nil {
+			return nil, fmt.Errorf("解析企业代码 %q 失败: %w", cfg.CompanyName, err)
+		}
+		cfg.Server = info.Domain
+	}
+	if cfg.Server != oldServer && client != nil {
+		if err := client.SetServer(cfg.Server); err != nil {
+			return nil, err
+		}
+	}
+	if (cfg.ActivateCode != oldActivate || cfg.CompanyName != oldCompany) && client != nil {
+		activate := cfg.ActivateCode
+		if activate == "" {
+			activate = cfg.CompanyName
+		}
+		client.SetSigner(sign.NewSigner(activate, cfg.DeviceID))
+	}
+
 	if in.ProxyListen != nil {
 		v := strings.TrimSpace(*in.ProxyListen)
 		if v != "" && v != cfg.SocksListen {

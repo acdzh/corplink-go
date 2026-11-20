@@ -16,6 +16,7 @@ import (
 	"github.com/acdzh/corplink-go/internal/api"
 	"github.com/acdzh/corplink-go/internal/auth"
 	"github.com/acdzh/corplink-go/internal/config"
+	"github.com/acdzh/corplink-go/internal/sign"
 )
 
 // 流程参数。
@@ -55,33 +56,104 @@ func New(client *api.Client, cfg *config.Config, ag *agent.Agent) *Service {
 	return &Service{auth: auth.NewService(client), client: client, cfg: cfg, agent: ag}
 }
 
-// Start 生成 PKCE 并返回授权链接。
-func (s *Service) Start(ctx context.Context, alias string) (string, error) {
-	if alias == "" {
-		alias = defaultAlias
+// ensureServer 在服务端地址未配置时尝试按企业代码解析并写回配置。
+func (s *Service) ensureServer(ctx context.Context) error {
+	if s.cfg.Server != "" {
+		return nil
+	}
+	if s.cfg.CompanyName == "" {
+		return fmt.Errorf("请先在设置中配置企业代码或服务端地址")
+	}
+	info, err := api.MatchCompany(ctx, s.cfg.CompanyName)
+	if err != nil {
+		return fmt.Errorf("解析企业代码 %q: %w", s.cfg.CompanyName, err)
+	}
+	s.cfg.Server = info.Domain
+	if err := s.client.SetServer(info.Domain); err != nil {
+		return err
+	}
+	activate := s.cfg.ActivateCode
+	if activate == "" {
+		activate = s.cfg.CompanyName
+	}
+	s.client.SetSigner(sign.NewSigner(activate, s.cfg.DeviceID))
+	_ = s.cfg.Save()
+	s.agent.LogEvent("info", "已解析企业 %s 服务端: %s", s.cfg.CompanyName, info.Domain)
+	return nil
+}
+
+// Methods 查询当前企业支持的第三方登录方式列表。
+func (s *Service) Methods(ctx context.Context) ([]api.ThirdPartyLogin, error) {
+	if err := s.ensureServer(ctx); err != nil {
+		return nil, err
 	}
 	pkce, err := auth.NewPKCE()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	methods, err := s.auth.TPSLink(ctx, pkce.Challenge, true)
+	return s.auth.TPSLink(ctx, pkce.Challenge, true)
+}
+
+// Start 生成 PKCE 并返回授权链接。
+func (s *Service) Start(ctx context.Context, alias string) (string, error) {
+	info, err := s.StartWithInfo(ctx, alias)
 	if err != nil {
 		return "", err
 	}
-	url := ""
-	for _, m := range methods {
-		if m.Alias == alias {
-			url = m.LoginURL
-			break
-		}
+	u, _ := info["url"].(string)
+	return u, nil
+}
+
+// StartWithInfo 生成 PKCE 并返回授权链接、选中的登录方式与可用登录方式列表。
+func (s *Service) StartWithInfo(ctx context.Context, alias string) (map[string]any, error) {
+	if err := s.ensureServer(ctx); err != nil {
+		return nil, err
 	}
-	if url == "" {
-		return "", fmt.Errorf("登录方式 %s 不可用（可用: %v）", alias, aliases(methods))
+	pkce, err := auth.NewPKCE()
+	if err != nil {
+		return nil, err
+	}
+	methods, err := s.auth.TPSLink(ctx, pkce.Challenge, true)
+	if err != nil {
+		return nil, err
+	}
+	chosen, err := chooseLoginMethod(methods, alias)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
-	s.current = &flow{verifier: pkce.Verifier, alias: alias, startedAt: time.Now()}
+	s.current = &flow{verifier: pkce.Verifier, alias: chosen.Alias, startedAt: time.Now()}
 	s.mu.Unlock()
-	return url, nil
+	s.agent.LogEvent("info", "已发起第三方授权登录（%s）", chosen.Alias)
+	return map[string]any{
+		"url":        chosen.LoginURL,
+		"alias":      chosen.Alias,
+		"full_title": chosen.FullTitle,
+		"methods":    methods,
+	}, nil
+}
+
+// chooseLoginMethod 选择登录方式：显式指定时精确匹配，未指定时按常见优先级回退到首个可用方式。
+func chooseLoginMethod(methods []api.ThirdPartyLogin, alias string) (*api.ThirdPartyLogin, error) {
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("服务端未返回可用的第三方登录方式")
+	}
+	if alias != "" {
+		for i := range methods {
+			if methods[i].Alias == alias || methods[i].AliasKey == alias {
+				return &methods[i], nil
+			}
+		}
+		return nil, fmt.Errorf("登录方式 %s 不可用（可用: %v）", alias, aliases(methods))
+	}
+	for _, preferred := range []string{defaultAlias, "lark"} {
+		for i := range methods {
+			if methods[i].Alias == preferred || methods[i].AliasKey == preferred {
+				return &methods[i], nil
+			}
+		}
+	}
+	return &methods[0], nil
 }
 
 // Callback 提交授权回调；若服务端要求二次验证则返回 mfa_required。
@@ -106,12 +178,40 @@ func (s *Service) Callback(ctx context.Context, raw string) (map[string]any, err
 		s.current.mfa = true
 		s.current.authList = list
 		s.mu.Unlock()
-		return map[string]any{"mfa_required": true, "auth_list": list}, nil
+		s.agent.LogEvent("info", "授权回调成功，等待二次验证")
+		return map[string]any{
+			"mfa_required": true,
+			"auth_list":    list,
+			"has_totp":     s.cfg.Code != "",
+		}, nil
 	}
 	if action != "" {
 		return nil, fmt.Errorf("服务端要求暂不支持的步骤: %s", action)
 	}
 	return s.finish(ctx)
+}
+
+// SendMFA 在等待二次验证阶段主动下发邮箱或短信验证码。
+func (s *Service) SendMFA(ctx context.Context, mfaType string) error {
+	s.mu.Lock()
+	current := s.current
+	s.mu.Unlock()
+	if current == nil || !current.mfa {
+		return fmt.Errorf("当前没有等待验证码的登录")
+	}
+	if mfaType == "" {
+		mfaType = mfaTypeEmail()
+	}
+	if _, err := s.auth.MfaSend(ctx, mfaScene, mfaType, ""); err != nil {
+		return err
+	}
+	s.agent.LogEvent("info", "已请求下发二次验证码（%s）", mfaType)
+	return nil
+}
+
+// mfaTypeEmail 返回默认的 MFA 验证码下发类型。
+func mfaTypeEmail() string {
+	return mfaType
 }
 
 // MFA 提交二次验证码；TOTP secret 存在时调用方可以自动生成。
@@ -151,6 +251,7 @@ func (s *Service) finish(ctx context.Context) (map[string]any, error) {
 	if err := s.agent.RefreshNodes(ctx); err != nil {
 		return map[string]any{"logged_in": true, "otp_saved": otpSaved, "warning": err.Error()}, nil
 	}
+	s.agent.LogEvent("info", "登录成功，节点 %d 个", len(s.agent.Nodes()))
 	return map[string]any{"logged_in": true, "otp_saved": otpSaved, "nodes": len(s.agent.Nodes())}, nil
 }
 
@@ -164,6 +265,7 @@ func (s *Service) Logout() error {
 	if err := os.Remove(s.cfg.SessionPath()); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除会话文件: %w", err)
 	}
+	s.agent.LogEvent("info", "已退出登录并清除本地会话")
 	return nil
 }
 

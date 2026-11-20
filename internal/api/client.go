@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,11 +24,15 @@ const requestTimeout = 20 * time.Second
 // maxBodyBytes 限制读取的响应体大小，避免异常响应打爆内存。
 const maxBodyBytes = 4 << 20
 
+// errNoServer 表示客户端尚未配置企业服务端地址。
+const errNoServer = "未配置服务端地址，请先在设置中配置企业代码或服务端地址"
+
 // Signer 为需要签名的接口生成 sign 头。返回空串表示不添加该头。
 type Signer func(ep Endpoint, method string, u *url.URL, body []byte, cookie, csrf, jwt string) (string, error)
 
 // Client 是飞连服务端的 HTTP 客户端，负责地址拼接、请求头、Cookie 与签名。
 type Client struct {
+	mu      sync.RWMutex
 	base    *url.URL
 	http    *http.Client
 	ua      string
@@ -56,22 +61,11 @@ type Options struct {
 	Meta Meta
 }
 
-// New 构造客户端并初始化 Cookie 容器。
+// New 构造客户端并初始化 Cookie 容器；Server 为空时允许延后通过 SetServer 配置。
 func New(opts Options) (*Client, error) {
-	base, err := url.Parse(strings.TrimRight(opts.Server, "/"))
-	if err != nil {
-		return nil, fmt.Errorf("解析服务端地址 %q: %w", opts.Server, err)
-	}
-	if base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("服务端地址不完整: %q", opts.Server)
-	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 cookie 容器: %w", err)
-	}
-	// device_id 以 cookie 形式参与风控，必须先于任何请求写入。
-	if opts.DeviceID != "" {
-		jar.SetCookies(base, []*http.Cookie{{Name: "device_id", Value: opts.DeviceID, Path: "/"}})
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if opts.InsecureSkipVerify {
@@ -87,15 +81,51 @@ func New(opts Options) (*Client, error) {
 	if lang == "" {
 		lang = "zh"
 	}
-	return &Client{
-		base:    base,
+	c := &Client{
 		http:    &http.Client{Jar: jar, Transport: transport, Timeout: requestTimeout},
 		ua:      ua,
 		lang:    lang,
 		device:  opts.DeviceID,
 		meta:    meta,
 		verbose: opts.Verbose,
-	}, nil
+	}
+	if strings.TrimSpace(opts.Server) != "" {
+		if err := c.SetServer(opts.Server); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+// SetServer 动态更新企业服务端地址，并同步写入 device_id Cookie。
+func (c *Client) SetServer(server string) error {
+	trimmed := strings.TrimSpace(strings.TrimRight(server, "/"))
+	if trimmed == "" {
+		c.mu.Lock()
+		c.base = nil
+		c.mu.Unlock()
+		return nil
+	}
+	base, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("解析服务端地址 %q: %w", server, err)
+	}
+	if base.Scheme == "" || base.Host == "" {
+		return fmt.Errorf("服务端地址不完整: %q", server)
+	}
+	c.mu.Lock()
+	c.base = base
+	c.mu.Unlock()
+	// device_id 以 cookie 形式参与风控，必须先于任何请求写入。
+	if c.device != "" {
+		c.http.Jar.SetCookies(base, []*http.Cookie{{Name: "device_id", Value: c.device, Path: "/"}})
+	}
+	return nil
+}
+
+// Server 返回当前配置的服务端地址，未配置时返回空串。
+func (c *Client) Server() string {
+	return c.Base()
 }
 
 // UserAgent 按官方客户端格式拼出 User-Agent：
@@ -127,13 +157,17 @@ func withMetaDefaults(m Meta) Meta {
 // SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
 // GetRaw 以当前会话拉取一个原始资源（如图片），仅允许本企业域名。
 func (c *Client) GetRaw(ctx context.Context, target string) ([]byte, string, error) {
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return nil, "", fmt.Errorf(errNoServer)
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, "", err
 	}
 	// 比较主机名（忽略端口），base 里通常带 :443。
-	if !strings.EqualFold(u.Hostname(), c.base.Hostname()) {
-		return nil, "", fmt.Errorf("只允许拉取 %s 的资源", c.base.Hostname())
+	if !strings.EqualFold(u.Hostname(), base.Hostname()) {
+		return nil, "", fmt.Errorf("只允许拉取 %s 的资源", base.Hostname())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -166,26 +200,63 @@ func (c *Client) HasSession() bool {
 	return false
 }
 
-func (c *Client) SetSigner(s Signer) { c.signer = s }
+func (c *Client) SetSigner(s Signer) {
+	c.mu.Lock()
+	c.signer = s
+	c.mu.Unlock()
+}
 
-// Base 返回服务端根地址，便于日志与后续拼接。
-func (c *Client) Base() string { return c.base.String() }
+// currentBase 安全读取当前服务端地址副本。
+func (c *Client) currentBase() *url.URL {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.base == nil {
+		return nil
+	}
+	copyURL := *c.base
+	return &copyURL
+}
+
+// Base 返回服务端根地址，便于日志与后续拼接；未配置时返回空串。
+func (c *Client) Base() string {
+	base := c.currentBase()
+	if base == nil {
+		return ""
+	}
+	return base.String()
+}
 
 // Cookies 返回当前 Cookie 集合的副本，用于持久化会话。
-func (c *Client) Cookies() []*http.Cookie { return c.http.Jar.Cookies(c.base) }
+func (c *Client) Cookies() []*http.Cookie {
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return nil
+	}
+	return c.http.Jar.Cookies(base)
+}
 
 // SetCookies 注入已持久化的会话 Cookie。
-func (c *Client) SetCookies(cookies []*http.Cookie) { c.http.Jar.SetCookies(c.base, cookies) }
+func (c *Client) SetCookies(cookies []*http.Cookie) {
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return
+	}
+	c.http.Jar.SetCookies(base, cookies)
+}
 
 // ClearCookies 清空 cookie jar（退出登录）。
 func (c *Client) ClearCookies() {
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return
+	}
 	// 标准库 jar 没有清空接口，用一组过期 Cookie 覆盖即可。
 	cookies := c.Cookies()
 	for _, ck := range cookies {
 		ck.Value = ""
 		ck.MaxAge = -1
 	}
-	c.http.Jar.SetCookies(c.base, cookies)
+	c.http.Jar.SetCookies(base, cookies)
 }
 
 // Do 发送一次接口请求并解析统一响应外壳。
@@ -199,8 +270,12 @@ func (c *Client) acceptLanguage() string {
 }
 
 func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any) (*Envelope, error) {
-	u := *c.base
-	u.Path = strings.TrimRight(c.base.Path, "/") + ep.Path
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return nil, fmt.Errorf(errNoServer)
+	}
+	u := *base
+	u.Path = strings.TrimRight(base.Path, "/") + ep.Path
 	merged := c.meta.Query()
 	for k, vs := range query {
 		merged[k] = vs
@@ -238,12 +313,15 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		req.Header.Set("csrf-token", csrf)
 	}
 
+	c.mu.RLock()
+	signer := c.signer
+	c.mu.RUnlock()
 	if ep.SigningInputParams != 0 {
-		if c.signer == nil {
+		if signer == nil {
 			return nil, fmt.Errorf("接口 %s 需要签名，但未配置签名器", ep.Path)
 		}
 		jwt := cookieValueOf(c.http.Jar.Cookies(&u), "vpn-token")
-		sign, err := c.signer(ep, method, &u, payload, cookieHeader, csrf, jwt)
+		sign, err := signer(ep, method, &u, payload, cookieHeader, csrf, jwt)
 		if err != nil {
 			return nil, fmt.Errorf("生成签名 %s: %w", ep.Path, err)
 		}

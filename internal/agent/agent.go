@@ -67,6 +67,16 @@ type State struct {
 	Routes int `json:"routes"`
 	// DNS 是隧道内 DNS。
 	DNS []string `json:"dns"`
+	// Protocol 是隧道传输协议（UDP 或 TCP）。
+	Protocol string `json:"protocol"`
+	// Endpoint 是节点 WireGuard 对端地址。
+	Endpoint string `json:"endpoint"`
+	// MTU 是隧道最大传输单元。
+	MTU int `json:"mtu"`
+	// Domains 是服务端下发的分流域名数量。
+	Domains int `json:"domains"`
+	// Tag 是当前节点标签。
+	Tag string `json:"tag"`
 }
 
 // Agent 管理唯一活动隧道。
@@ -88,12 +98,14 @@ type Agent struct {
 
 // active 是一条活动隧道及其元信息。
 type active struct {
-	node    api.VpnInfo
-	tun     *tunnel.Tunnel
-	addr    string
-	dns     []string
-	domains []string
-	since   time.Time
+	node     api.VpnInfo
+	tun      *tunnel.Tunnel
+	addr     string
+	dns      []string
+	domains  []string
+	mtu      int
+	protocol string
+	since    time.Time
 }
 
 // New 构造 Agent 并尝试拉取节点列表。
@@ -109,21 +121,29 @@ func New(ctx context.Context, cfg *config.Config, client *api.Client) *Agent {
 
 // RefreshNodes 重新拉取节点列表。
 func (a *Agent) RefreshNodes(ctx context.Context) error {
-	env, err := a.client.Do(ctx, api.EndpointVPNList, nil, nil)
-	if err != nil {
+	recordErr := func(err error) error {
+		a.mu.Lock()
+		a.lastErr = err
+		a.mu.Unlock()
+		a.addEvent("warn", "拉取节点列表失败: %v", err)
 		return err
 	}
+	env, err := a.client.Do(ctx, api.EndpointVPNList, nil, nil)
+	if err != nil {
+		return recordErr(err)
+	}
 	if !env.OK() {
-		return env.Error()
+		return recordErr(env.Error())
 	}
 	var nodes []api.VpnInfo
 	if err := json.Unmarshal(env.Data, &nodes); err != nil {
-		return err
+		return recordErr(err)
 	}
 	a.mu.Lock()
 	a.nodes = nodes
 	a.lastErr = nil
 	a.mu.Unlock()
+	a.addEvent("info", "已刷新节点列表，共 %d 个节点", len(nodes))
 	return nil
 }
 
@@ -178,6 +198,11 @@ func (a *Agent) State() State {
 		Since:     a.current.since.Format(time.RFC3339),
 		Routes:    len(a.current.tun.Routes()),
 		DNS:       a.current.dns,
+		Protocol:  a.current.protocol,
+		Endpoint:  fmt.Sprintf("%s:%d", a.current.node.IP, a.current.node.VPNPort),
+		MTU:       a.current.mtu,
+		Domains:   len(a.current.domains),
+		Tag:       a.current.node.TagName,
 	}
 }
 
@@ -222,9 +247,15 @@ func (a *Agent) Allowed(addr netip.Addr) bool {
 // Connect 连接指定节点；name 为 auto 时先测速再选最快的节点。
 func (a *Agent) Connect(ctx context.Context, name string) error {
 	if name == "auto" {
+		a.addEvent("info", "正在测速并自动选择最快节点...")
 		best, ok := a.fastest(ctx)
 		if !ok {
-			return fmt.Errorf("没有可用节点")
+			err := fmt.Errorf("没有可用节点")
+			a.mu.Lock()
+			a.lastErr = err
+			a.mu.Unlock()
+			a.addEvent("error", "自动选路连接失败: %v", err)
+			return err
 		}
 		a.SetAuto(true)
 		return a.connectNode(ctx, best)
@@ -237,23 +268,34 @@ func (a *Agent) Connect(ctx context.Context, name string) error {
 func (a *Agent) connectNode(ctx context.Context, name string) error {
 	node, err := a.pick(name)
 	if err != nil {
+		a.mu.Lock()
+		a.lastErr = err
+		a.mu.Unlock()
+		a.addEvent("error", "选择节点失败: %v", err)
 		return err
 	}
+	target := nodeName(node)
+	a.addEvent("info", "正在连接节点 %s...", target)
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	next, err := a.build(connCtx, node)
 	if err != nil {
+		a.mu.Lock()
+		a.lastErr = err
+		a.mu.Unlock()
+		a.addEvent("error", "连接 %s 失败: %v", target, err)
 		return err
 	}
 	a.mu.Lock()
 	old := a.current
 	a.current = next
+	a.lastErr = nil
 	a.mu.Unlock()
 	if old != nil {
 		// make-before-break：新隧道就绪后再释放旧隧道。
 		time.AfterFunc(5*time.Second, old.tun.Close)
 	}
-	a.addEvent("info", "已连接 %s（%s）", nodeName(node), next.addr)
+	a.addEvent("info", "已连接 %s（隧道 %s，%s，路由 %d 条）", target, next.addr, next.protocol, len(next.tun.Routes()))
 	return nil
 }
 
@@ -265,6 +307,7 @@ func (a *Agent) Disconnect() {
 	a.mu.Unlock()
 	if old != nil {
 		old.tun.Close()
+		a.addEvent("info", "已断开节点 %s", nodeName(old.node))
 	}
 }
 
@@ -286,17 +329,22 @@ func (a *Agent) Keepalive(ctx context.Context, interval time.Duration) {
 			probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			env, err := a.client.Do(probeCtx, api.EndpointInfoMe, nil, nil)
 			cancel()
+			var probeErr error
 			a.mu.Lock()
 			switch {
 			case err != nil:
 				a.lastErr = err
+				probeErr = err
 			case !env.OK():
 				a.lastErr = env.Error()
+				probeErr = a.lastErr
 			default:
 				a.lastErr = nil
 			}
 			a.mu.Unlock()
-			if err == nil && env.OK() {
+			if probeErr != nil {
+				a.addEvent("warn", "会话保活探测异常: %v", probeErr)
+			} else {
 				// 服务端若刷新了 Cookie，落盘保存，避免重启后失效。
 				_ = a.client.SaveCookies(a.cfg.SessionPath())
 			}
@@ -339,37 +387,26 @@ func (a *Agent) Stats() Stats {
 	return out
 }
 
-// LatencyAll 并发测所有节点的 API 端口建连耗时（毫秒），失败为 -1。
+// LatencyAll 并发测所有节点的 /vpn/ping 耗时（毫秒），失败为 -1。
 func (a *Agent) LatencyAll(ctx context.Context) map[string]int64 {
-	nodes := a.Nodes()
-	out := make(map[string]int64, len(nodes))
-	type result struct {
-		name string
-		ms   int64
+	return a.PingAll(ctx)
+}
+
+// Ping 对单个节点执行 /vpn/ping 测速并更新缓存。
+func (a *Agent) Ping(ctx context.Context, name string) (int64, error) {
+	node, err := a.pick(name)
+	if err != nil {
+		return -1, err
 	}
-	results := make(chan result, len(nodes))
-	sem := make(chan struct{}, 32)
-	var wg sync.WaitGroup
-	for _, node := range nodes {
-		node := node
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			ms, err := a.Latency(ctx, nodeName(node))
-			if err != nil {
-				ms = -1
-			}
-			results <- result{name: nodeName(node), ms: ms}
-		}()
+	ms := pingNode(ctx, node)
+	key := nodeName(node)
+	a.mu.Lock()
+	if a.latencies == nil {
+		a.latencies = map[string]int64{}
 	}
-	wg.Wait()
-	close(results)
-	for r := range results {
-		out[r.name] = r.ms
-	}
-	return out
+	a.latencies[key] = ms
+	a.mu.Unlock()
+	return ms, nil
 }
 
 // Warmup 在登录成功后按官方客户端的顺序拉一批基础配置，
@@ -461,12 +498,15 @@ func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
 
 // pingNode 请求节点的 /vpn/ping 并返回毫秒耗时，失败返回 -1。
 func pingNode(ctx context.Context, node api.VpnInfo) int64 {
+	transport := &http.Transport{
+		// 节点使用自签证书，且这里只测连通性，不做身份校验。
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
+	}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		Timeout: pingTimeout,
-		Transport: &http.Transport{
-			// 节点使用自签证书，且这里只测连通性，不做身份校验。
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
+		Timeout:   pingTimeout,
+		Transport: transport,
 	}
 	url := fmt.Sprintf("https://%s:%d/vpn/ping", pingTarget(node), node.APIPort)
 	reqCtx, cancel := context.WithTimeout(ctx, pingTimeout)
@@ -496,6 +536,18 @@ type Event struct {
 	Level string `json:"level"`
 	// Message 是事件内容。
 	Message string `json:"message"`
+}
+
+// LogEvent 对外提供事件记录入口，供登录与配置等模块写入运行日志。
+func (a *Agent) LogEvent(level, format string, args ...any) {
+	a.addEvent(level, format, args...)
+}
+
+// ClearEvents 清空当前内存中的运行事件日志。
+func (a *Agent) ClearEvents() {
+	a.mu.Lock()
+	a.events = nil
+	a.mu.Unlock()
 }
 
 // addEvent 记录一条事件，仅保留最近 100 条。
@@ -615,6 +667,7 @@ func (a *Agent) autoRound(ctx context.Context) {
 	shouldSwitch := currentMs < 0 || (bestMs >= 0 && currentMs > bestMs+30 && int64(float64(bestMs)*1.4) < currentMs)
 	if shouldSwitch && best != state.Node {
 		if err := a.connectNode(ctx, best); err == nil {
+			a.addEvent("info", "自动选路切换: %s (%d ms) -> %s (%d ms)", state.Node, currentMs, best, bestMs)
 			fmt.Printf("自动选路: %s(%dms) -> %s(%dms)\n", state.Node, currentMs, best, bestMs)
 		}
 	}
@@ -698,9 +751,12 @@ func (a *Agent) build(ctx context.Context, node api.VpnInfo) (*active, error) {
 		addresses = append(addresses, info.IPv6)
 	}
 	protocol := tunnel.ProtocolUDP
+	protocolName := "UDP"
 	if node.ProtocolMode == 1 {
 		protocol = tunnel.ProtocolTCP
+		protocolName = "TCP"
 	}
+	mtu := int(info.Setting.VpnMTU)
 	// 数据面固定用服务端下发的全量路由：我们只负责提供代理，
 	// 哪些流量进代理由 Clash 等使用方通过规则决定。
 	allowed := info.Setting.VpnRouteFull
@@ -714,19 +770,24 @@ func (a *Agent) build(ctx context.Context, node api.VpnInfo) (*active, error) {
 		Addresses:  addresses,
 		DNS:        dns,
 		AllowedIPs: allowed,
-		MTU:        int(info.Setting.VpnMTU),
+		MTU:        mtu,
 		Protocol:   protocol,
 	})
 	if err != nil {
 		return nil, err
 	}
+	if mtu <= 0 {
+		mtu = 1420
+	}
 	return &active{
-		node:    node,
-		tun:     tun,
-		addr:    info.IP,
-		dns:     dns,
-		domains: info.Setting.VpnDNSDomain,
-		since:   time.Now(),
+		node:     node,
+		tun:      tun,
+		addr:     info.IP,
+		dns:      dns,
+		domains:  info.Setting.VpnDNSDomain,
+		mtu:      mtu,
+		protocol: protocolName,
+		since:    time.Now(),
 	}, nil
 }
 
