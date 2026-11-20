@@ -646,6 +646,34 @@
     color: #ffffff;
   }
 
+  .easter-footer {
+    font-size: 12px;
+    color: var(--faint);
+    text-align: center;
+    padding: 12px 0 4px;
+    user-select: none;
+  }
+
+  .easter-trigger {
+    cursor: pointer;
+    transition: color 0.2s ease;
+  }
+
+  .easter-trigger:hover {
+    color: var(--accent);
+  }
+
+  .easter-choices {
+    display: none;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .easter-choices.open {
+    display: flex;
+  }
+
   @media (max-width: 760px) {
     .grid4 { grid-template-columns: repeat(2, 1fr); }
     .grid2 { grid-template-columns: 1fr; }
@@ -885,6 +913,14 @@
     </div>
     <div id="logs"></div>
   </section>
+
+  <footer class="easter-footer">
+    <span class="easter-trigger" id="easterTrigger" title="一生、バンド……プロキシする？">一生プロキシしてくれる？</span>
+    <div class="easter-choices" id="easterChoices">
+      <button class="sm primary" id="btnEasterAccept">「一生、プロキシする」</button>
+      <button class="sm" id="btnEasterHeavy">「重いよ…」</button>
+    </div>
+  </footer>
 </main>
 
 <div id="toast"></div>
@@ -909,6 +945,7 @@ let connecting = false;
 let pinging = false;
 let refreshing = false;
 let toastTimer = null;
+let lifetimePact = false;
 
 function esc(s) {
   return String(s || '')
@@ -1379,7 +1416,13 @@ async function connectNode(target) {
 async function disconnect() {
   try {
     await api('/api/disconnect', { method: 'POST' });
-    showToast('已断开隧道');
+    if (lifetimePact) {
+      lifetimePact = false;
+      $('easterTrigger').textContent = '一生プロキシしてくれる？';
+      showToast('「なんでプロキシ切ったの！？」', true);
+    } else {
+      showToast('已断开隧道');
+    }
     await refreshStatus();
     await refreshStats();
     await refreshLogs();
@@ -1903,6 +1946,28 @@ $('mfaCode').onkeydown = (e) => {
 $('btnLogout').onclick = logout;
 $('btnSaveSettings').onclick = saveSettings;
 $('btnClearLogs').onclick = clearLogs;
+$('easterTrigger').onclick = () => {
+  if (lifetimePact) {
+    showToast('「迷子でもいい、迷子でもプロキシ進め。」');
+    return;
+  }
+  $('easterChoices').classList.toggle('open');
+};
+$('btnEasterHeavy').onclick = () => {
+  $('easterChoices').classList.remove('open');
+  showToast('「自分のことばかりですね」');
+};
+$('btnEasterAccept').onclick = () => {
+  lifetimePact = true;
+  document.title = '一生プロキシしてくれる？';
+  $('easterTrigger').textContent = '✦ 一生、プロキシする ✦';
+  $('easterChoices').classList.remove('open');
+  showToast('「迷子でもいい、迷子でもプロキシ進め。」');
+  const connected = Boolean(serverStatus && serverStatus.state && serverStatus.state.connected);
+  if (!connected) {
+    connectNode(userPicked);
+  }
+};
 
 (async () => {
   await Promise.all([

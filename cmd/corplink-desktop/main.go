@@ -45,11 +45,12 @@ type uiState struct {
 	selected string
 	search   string
 
-	connecting bool
-	pinging    bool
-	refreshing bool
-	errMsg     string
-	noticeMsg  string
+	connecting   bool
+	pinging      bool
+	refreshing   bool
+	lifetimePact bool
+	errMsg       string
+	noticeMsg    string
 
 	txRate       float64
 	rxRate       float64
@@ -228,7 +229,9 @@ func main() {
 					st.errMsg = "连接失败: " + err.Error()
 				} else {
 					st.errMsg = ""
-					if target == "auto" {
+					if st.lifetimePact {
+						st.noticeMsg = "「一生、プロキシする。迷子でもプロキシ進め。」"
+					} else if target == "auto" {
 						st.noticeMsg = "已通过自动选路建立连接"
 					} else {
 						st.noticeMsg = "已连接到 " + target
@@ -244,11 +247,17 @@ func main() {
 	disconnect := func() {
 		rt.Agent.Disconnect()
 		updateUI(func() {
-			st.errMsg = ""
-			st.noticeMsg = "已断开连接"
 			st.txRate = 0
 			st.rxRate = 0
 			st.lastSampleAt = time.Time{}
+			if st.lifetimePact {
+				st.lifetimePact = false
+				st.noticeMsg = ""
+				st.errMsg = "「なんでプロキシ切ったの！？」"
+			} else {
+				st.errMsg = ""
+				st.noticeMsg = "已断开连接"
+			}
 		})
 		if refreshTrayFn != nil {
 			refreshTrayFn()
@@ -406,6 +415,19 @@ func main() {
 			ui.Column(c).Padding(8, 20, 14, 20).Gap(2).Children(func() {
 				ui.Text(c, "代理 "+rt.ProxyAddr).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
 				ui.Text(c, "面板 "+rt.PanelAddr).FontSize(fsTiny).TextColor(p.Faint).SingleLine()
+				easterText := "一生プロキシしてくれる？"
+				if st.lifetimePact {
+					easterText = "✦ 一生、プロキシする ✦"
+				}
+				ui.Text(c, easterText).FontSize(fsTiny).TextColor(p.Faint).SingleLine().
+					OnClick(func() {
+						st.lifetimePact = true
+						st.errMsg = ""
+						st.noticeMsg = "「一生、プロキシする。迷子でもプロキシ進め。」"
+						if !state.Connected {
+							connect(st.selected)
+						}
+					})
 			})
 		})
 	}
