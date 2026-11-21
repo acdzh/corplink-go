@@ -147,8 +147,8 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 		}
 		writeJSON(w, map[string]int{"nodes": len(c.Nodes())})
 	})
-	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, _ *http.Request) {
-		writeSubscription(w, c.ClashProfile())
+	mux.HandleFunc("/clash.yml", func(w http.ResponseWriter, r *http.Request) {
+		writeSubscription(w, c.ClashProfileFor(r.Host))
 	})
 
 	mux.HandleFunc("/api/login/methods", func(w http.ResponseWriter, r *http.Request) {

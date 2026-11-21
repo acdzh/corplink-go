@@ -677,7 +677,18 @@ func (c *Client) FetchIcon(ctx context.Context, target string) ([]byte, string, 
 }
 
 // ClashProfile 生成 Clash 订阅内容：防回环直连规则 + 服务端下发的分流规则。
+//
+// 不带客户端视角的内网 DNS 地址，内部域名会退回指向隧道内 DNS（客户端不可达），
+// 供不带请求上下文的调用方使用；HTTP 入口请用 ClashProfileFor。
 func (c *Client) ClashProfile() string {
+	return c.ClashProfileFor("")
+}
+
+// ClashProfileFor 生成订阅，并把内网 DNS 指向"客户端能访问到的本程序 DNS"。
+//
+// requestHost 是访问 /clash.yml 时的 Host（如 10.0.0.141:13140）：只有当 DNS
+// 监听在非回环地址时才有意义——客户端就在同一台机器上时 Host 也是 127.0.0.1。
+func (c *Client) ClashProfileFor(requestHost string) string {
 	var directDomains []string
 	if u, err := url.Parse(c.cfg.Server); err == nil && u.Hostname() != "" {
 		directDomains = append(directDomains, u.Hostname())
@@ -697,7 +708,34 @@ func (c *Client) ClashProfile() string {
 		Domains:        c.agent.Domains(),
 		DynamicDomains: c.agent.DynamicDomains(),
 		VPNDNS:         c.agent.VPNDNS(),
+		DNSTarget:      c.dnsTargetFor(requestHost),
 	})
+}
+
+// dnsTargetFor 返回订阅里应该写的内网 DNS 地址。
+//
+// 隧道内 DNS（10.8.8.18）只在隧道里可达；客户端在隧道外，必须指向本程序
+// 监听的 DNS。Host 取访问订阅时的地址，端口取 DNS 实际监听端口；
+// DNS 未启用或只监听回环时返回空串，调用方回退到服务端下发的 vpn_dns。
+func (c *Client) dnsTargetFor(requestHost string) string {
+	_, port, err := net.SplitHostPort(c.dnsAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	host := requestHost
+	if h, _, err := net.SplitHostPort(requestHost); err == nil {
+		host = h
+	}
+	if strings.HasPrefix(host, "127.") || host == "localhost" || host == "" {
+		// 本机访问时 Host 也是回环，仍可用，但要求 DNS 自己也在回环上
+		if !strings.HasPrefix(c.dnsAddr, "127.") && !strings.HasPrefix(c.dnsAddr, "0.0.0.0") {
+			return ""
+		}
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // reportDevice 用当前会话补报一次设备信息（/vpn/conn 回 3015 时自愈用）。

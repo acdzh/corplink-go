@@ -42,6 +42,12 @@ type Options struct {
 	DynamicDomains []string
 	// VPNDNS 是内网 DNS，用于给内网域名单独指定解析服务器。
 	VPNDNS []string
+	// DNSTarget 是客户端应当使用的内网 DNS 地址（形如 10.0.0.141:10053）。
+	//
+	// 优先于 VPNDNS：10.8.8.18 这类隧道内 DNS 只在隧道里可达，客户端机器
+	// 直接用会超时，表现为"内网域名找不到 DNS"。本程序自己起的本地 DNS
+	// 才是在隧道外可达的入口，订阅里必须指向它。
+	DNSTarget string
 }
 
 // Clash 生成 Clash 配置。
@@ -66,14 +72,21 @@ func Clash(opts Options) string {
 		"nameserver":    []string{"223.5.5.5", "119.29.29.29"},
 		"fallback":      []string{"1.1.1.1", "8.8.8.8"},
 	}
-	// 内网域名必须由隧道内 DNS 解析：否则公司域名在公网 DNS 上直接 NXDOMAIN，
-	// 表现为"连上了但公司站点打不开"。官方同样把 vpn_dns 绑到这些后缀上。
-	if len(opts.VPNDNS) > 0 && (len(opts.Domains) > 0 || len(opts.DynamicDomains) > 0) {
+	// 内网域名必须由能走隧道的 DNS 解析：否则公司域名在公网 DNS 上直接 NXDOMAIN，
+	// 表现为"连上了但公司站点打不开"。DNSTarget（本程序的本地 DNS）优先，
+	// 因为 vpn_dns 只在隧道内可达，客户端直接指向它会全部超时。
+	dnsServers := opts.VPNDNS
+	if opts.DNSTarget != "" {
+		dnsServers = []string{opts.DNSTarget}
+	}
+	if len(dnsServers) > 0 && (len(opts.Domains) > 0 || len(opts.DynamicDomains) > 0) {
 		policy := map[string]any{}
-		for _, dnsIP := range opts.VPNDNS {
+		for _, dnsIP := range dnsServers {
 			for _, domain := range append(append([]string{}, opts.Domains...), opts.DynamicDomains...) {
-				domain = strings.TrimSpace(domain)
-				if domain == "" || strings.HasPrefix(domain, "*.") {
+				// 服务端同时下发 "x.com" 与 "*.x.com"，统一成裸域名再写 policy；
+				// 只剩通配写法时也不能丢，否则该租户的内网域名会退回公网 DNS。
+				domain = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(domain), "*."))
+				if domain == "" {
 					continue
 				}
 				policy["+."+domain] = []string{dnsIP}
