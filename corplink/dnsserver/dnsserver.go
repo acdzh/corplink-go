@@ -244,7 +244,39 @@ func (s *Server) resolve(ctx context.Context, query []byte, tcp bool) ([]byte, e
 	if lastErr == nil {
 		lastErr = errors.New("没有可用的上游 DNS")
 	}
+	// 隧道 DNS 抖动/断流时，公网域名不该跟着全挂：最后再试一次物理网络 DNS。
+	// 内网域名在物理 DNS 上会正常回 NXDOMAIN，代价很小。
+	if fallback := s.physicalFallback(upstreams); len(fallback) > 0 {
+		for _, upstream := range fallback {
+			resp, err := s.forward(ctx, upstream, query, tcp)
+			if err != nil {
+				continue
+			}
+			s.saveCache(key, resp)
+			return resp, nil
+		}
+	}
 	return nil, lastErr
+}
+
+// physicalFallback 返回可作为兜底的物理网络 DNS（与主上游不重复时）。
+func (s *Server) physicalFallback(primary []string) []string {
+	physical := s.physicalUpstreams()
+	if len(physical) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(primary))
+	for _, up := range primary {
+		seen[withDefaultPort(up)] = true
+	}
+	out := make([]string, 0, len(physical))
+	for _, up := range physical {
+		if seen[withDefaultPort(up)] || s.sameAsListen(up) {
+			continue
+		}
+		out = append(out, up)
+	}
+	return out
 }
 
 // upstreamsFor 按域名选择上游：命中内网后缀走隧道 DNS，其余走系统 DNS。

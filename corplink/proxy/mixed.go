@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/acdzh/corplink-go/corplink/agent"
@@ -25,16 +26,39 @@ const (
 	dialTimeout = 15 * time.Second
 	// handshakeTimeout 是读取代理请求头的超时。
 	handshakeTimeout = 20 * time.Second
+	// resolveTimeout 是隧道内域名解析的上限。解析不走 ctx 时一旦上游 DNS 抖动，
+	// 整个 SOCKS 握手会卡到客户端（Clash/mihomo 默认 5s）先超时。
+	resolveTimeout = 3 * time.Second
+	// resolveCacheTTL 是域名解析结果的缓存时间：连接级缓存能挡掉绝大部分重复解析。
+	resolveCacheTTL = 5 * time.Minute
+	// maxResolveCache 是缓存条目上限。
+	maxResolveCache = 1024
 )
 
 // Server 是混合代理服务。
 type Server struct {
 	agent *agent.Agent
+
+	mu    sync.Mutex
+	cache map[string]resolveEntry
+}
+
+// resolveEntry 是一条解析缓存。
+type resolveEntry struct {
+	addr    netip.Addr
+	expires time.Time
 }
 
 // New 构造混合代理。
 func New(a *agent.Agent) *Server {
-	return &Server{agent: a}
+	return &Server{agent: a, cache: make(map[string]resolveEntry)}
+}
+
+// ResetCache 清空解析缓存（隧道重连后地址可能变化）。
+func (s *Server) ResetCache() {
+	s.mu.Lock()
+	s.cache = make(map[string]resolveEntry)
+	s.mu.Unlock()
 }
 
 // Serve 在监听器上接受连接，按协议分发。
@@ -201,13 +225,23 @@ func (s *Server) dial(ctx context.Context, host string, port int) (net.Conn, err
 }
 
 // resolve 解析目标地址，域名走隧道内 DNS 并优先 IPv4。
+//
+// 带缓存 + 超时：隧道内 DNS 偶发抖动时，不能让每个新连接都重新卡 3 秒以上；
+// 解析失败要快速失败（客户端能立刻重试），而不是把连接挂死。
 func (s *Server) resolve(tun tunLike, host string) (netip.Addr, error) {
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return addr, nil
 	}
-	addrs, err := tun.LookupHost(host)
+	if addr, ok := s.loadCached(host); ok {
+		return addr, nil
+	}
+	addrs, err := s.lookupWithTimeout(tun, host)
 	if err != nil {
 		return netip.Addr{}, err
+	}
+	defer s.storeCached(host, addrs)
+	if len(addrs) == 0 {
+		return netip.Addr{}, fmt.Errorf("解析 %s 失败", host)
 	}
 	var fallback netip.Addr
 	for _, raw := range addrs {
@@ -226,6 +260,56 @@ func (s *Server) resolve(tun tunLike, host string) (netip.Addr, error) {
 		return fallback, nil
 	}
 	return netip.Addr{}, fmt.Errorf("解析 %s 失败", host)
+}
+
+// loadCached 读解析缓存。
+func (s *Server) loadCached(host string) (netip.Addr, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.cache[host]
+	if !ok || time.Now().After(entry.expires) {
+		delete(s.cache, host)
+		return netip.Addr{}, false
+	}
+	return entry.addr, true
+}
+
+// storeCached 写解析缓存。
+func (s *Server) storeCached(host string, addrs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.cache) >= maxResolveCache {
+		for k := range s.cache {
+			delete(s.cache, k)
+			break
+		}
+	}
+	for _, raw := range addrs {
+		addr, err := netip.ParseAddr(raw)
+		if err == nil && addr.Is4() {
+			s.cache[host] = resolveEntry{addr: addr, expires: time.Now().Add(resolveCacheTTL)}
+			return
+		}
+	}
+}
+
+// lookupWithTimeout 给隧道内的 DNS 解析加超时，避免握手被上游抖动拖死。
+func (s *Server) lookupWithTimeout(tun tunLike, host string) ([]string, error) {
+	type result struct {
+		addrs []string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		addrs, err := tun.LookupHost(host)
+		done <- result{addrs: addrs, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.addrs, r.err
+	case <-time.After(resolveTimeout):
+		return nil, fmt.Errorf("解析 %s 超时（%s）", host, resolveTimeout)
+	}
 }
 
 // tunLike 抽象出代理需要的隧道能力，便于测试。

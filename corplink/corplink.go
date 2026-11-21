@@ -322,9 +322,17 @@ func (c *Client) StartProxy(addr string) error {
 	}
 	c.proxyLn = ln
 	c.proxyAddr = ln.Addr().String()
+	server := proxy.New(c.agent)
+	// 隧道重连后内网地址可能变化，解析缓存必须跟着清。
+	c.agent.SetOnTunnelChange(func() {
+		server.ResetCache()
+		if c.dns != nil {
+			c.dns.Reset()
+		}
+	})
 	runCtx := c.runCtx
 	go func() {
-		if err := proxy.New(c.agent).Serve(ln); err != nil && (runCtx == nil || runCtx.Err() == nil) {
+		if err := server.Serve(ln); err != nil && (runCtx == nil || runCtx.Err() == nil) {
 			c.log.Warn("代理服务退出", "err", err)
 		}
 	}()
