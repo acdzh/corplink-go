@@ -241,7 +241,7 @@ Android 端只启用库与 VpnService，不起代理与面板，构建方式见 
 版本号是日期，不用手写：
 
 - 触发：仓库 Actions → `release` → `Run workflow`（也可以自己打 tag，形如 `v2026.11.21`）
-- 版本号 = 当天日期 `v2026.11.21`；同一天发第二次自动变 `v2026.11.21.2`
+- 版本号 = 当天日期 `v2026.11.22`；同一天发第二次自动变 `v2026.11.22-2`（goreleaser 只认三段式 semver，四段会被判非法）
 - 产物：goreleaser 出 6 个平台的 CLI 包 + 桌面端包，ghcr 出 `corplink-go:2026.11.21` 与 `latest`（linux/amd64 + linux/arm64）
 - Android 的 `versionName` 用同一个字符串，`versionCode` 由它派生（`2026.11.21` → `20261121`）
 

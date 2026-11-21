@@ -59,3 +59,5 @@ checksum:
 
 release:
   draft: false
+  # 同一天第二次发版的 tag 形如 v2026.11.22-2，语义上是补发，不标成预发布。
+  prerelease: false

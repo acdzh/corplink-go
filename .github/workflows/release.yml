@@ -31,9 +31,11 @@ jobs:
             base=$(TZ=Asia/Shanghai date +%Y.%m.%d)
             v="v$base"
             n=1
+            # 同一天第二次发版用 -N 后缀：goreleaser 只认三段式 semver，
+            # v2026.11.22.2 这种四段 tag 会被判非法。
             while git ls-remote --exit-code --tags origin "$v" >/dev/null 2>&1; do
               n=$((n+1))
-              v="v$base.$n"
+              v="v$base-$n"
             done
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
