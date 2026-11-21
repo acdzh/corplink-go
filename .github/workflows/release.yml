@@ -103,13 +103,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # 默认会去装 "tools" 包，新版 cmdline-tools 里已经没有了，自己装需要的。
+          packages: ''
       - name: 安装 SDK 组件与 NDK
         run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/27.0.12077973" >> "$GITHUB_ENV"
       - name: 准备 gomobile
