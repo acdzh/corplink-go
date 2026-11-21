@@ -397,6 +397,21 @@ func (a *Agent) Domains() []string {
 	return a.current.domains
 }
 
+// DialContext 通过当前隧道拨号；没有隧道时退回系统栈。
+//
+// 本地 DNS 服务用它把内网查询送进隧道，公网查询走系统。
+func (a *Agent) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	a.mu.RLock()
+	cur := a.current
+	a.mu.RUnlock()
+	if cur != nil && cur.tun != nil {
+		if conn, err := cur.tun.DialContext(ctx, network, addr); err == nil {
+			return conn, nil
+		}
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
+
 // DynamicDomains 返回当前隧道的动态域名清单（服务端 dynamic_domain）。
 func (a *Agent) DynamicDomains() []string {
 	a.mu.RLock()

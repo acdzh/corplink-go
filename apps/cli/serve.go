@@ -22,6 +22,7 @@ func runServe(args []string) error {
 	cfgPath := fs.String("config", "", "配置文件路径，默认用户配置目录")
 	proxyAddr := fs.String("proxy", "", "混合代理监听地址（SOCKS5 + HTTP），默认取配置")
 	panelAddr := fs.String("panel", "", "控制面板监听地址，默认取配置")
+	dnsAddr := fs.String("dns", "", "本地 DNS 监听地址（默认 127.0.0.1:10053，留空取配置）")
 	nodeName := fs.String("name", "", "启动时自动连接的节点名，默认取配置")
 	keepalive := fs.Duration("keepalive", 0, "会话保活间隔，默认取配置（缺省 30m）")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
@@ -50,6 +51,7 @@ func runServe(args []string) error {
 		Config:      cfg,
 		Logger:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		ProxyListen: listenProxy,
+		DNSListen:   *dnsAddr,
 		AutoNode:    *nodeName,
 		Keepalive:   *keepalive,
 		Verbose:     *verbose,

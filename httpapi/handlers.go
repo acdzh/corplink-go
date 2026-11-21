@@ -42,6 +42,7 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 			"dpop_key_id":    st.DpopKeyID,
 			"dpop_bound":     st.DpopBound,
 			"dpop_need_code": st.DpopNeedCode,
+			"dns_addr":       st.DNSAddr,
 			"kicked":         st.Kicked,
 			"kick_reason":    st.KickReason,
 		})

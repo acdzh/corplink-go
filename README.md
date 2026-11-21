@@ -16,6 +16,7 @@ corplink/  库：登录、签名、隧道、代理、订阅、TOTP —— 只依
 - **登录与保活**：PKCE 第三方授权（SSO / 飞书）+ 二次验证（邮箱 / 短信 / 自动 TOTP），会话自动保存与保活
 - **协议与隧道**：按服务端规则对请求签名（HKDF + HMAC + protobuf 头 + DPoP 设备证明），拉取节点并建立 WireGuard 隧道（支持 UDP 与 TCP 分帧）
 - **混合代理**：本机单端口同时提供 SOCKS5 与 HTTP 代理，不设用户名密码
+- **本地 DNS**：在 127.0.0.1:10053 提供解析服务，内网域名走隧道内 DNS、其余走系统 DNS（官方客户端对应 53 端口）
 - **Web 控制面板**：连接/断开/自动选路/单节点与全量测速/节点搜索与标签筛选/分流规则校验/TOTP 倒计时与复制/实时流量速率与峰值/登录向导/运行日志/动态配置
 - **Clash 订阅**：生成防回环的 Clash 配置，分流规则由服务端下发并交给 Clash 执行
 - **桌面客户端**：MyGo 原生窗口（节点、流量、令牌、设置、日志）+ 菜单栏动态状态图标、节点直连切换与一键复制动态码
@@ -107,7 +108,41 @@ DNS 使用 fake-ip，内网域名不依赖本机 DNS。
 混进去等于把长寿命私钥直接暴露；分开存放也让"换个会话继续用同一把设备密钥"成立。
 
 TOTP secret 存在 `config.json` 的 `code` 字段（登录成功后自动写入）。
+本地 DNS 监听地址存在 `dns_listen` 字段（默认 `127.0.0.1:10053`，留空即关闭）。
 Docker 下默认数据目录为 `/data`。
+
+## 本地 DNS
+
+官方客户端启动后会在本机 53 端口提供解析服务；我们在 **127.0.0.1:10053** 提供同样的能力，
+避免和系统解析器抢端口：
+
+```bash
+# 默认随 serve 一起启动，监听 127.0.0.1:10053
+corplink serve
+
+# 改地址 / 关掉
+corplink serve -dns 127.0.0.1:10053
+corplink serve -dns ""
+```
+
+分流规则：
+
+| 查询 | 上游 | 说明 |
+| --- | --- | --- |
+| 命中 `vpn_dns_domain_split` 或 `dynamic_domain` 的后缀 | 隧道内 DNS（`vpn_dns`/`vpn_dns_backup`，经 WireGuard） | 公司域名解析不泄漏给本地运营商 |
+| 其余域名 | 系统 DNS（读 /etc/resolv.conf），隧道 DNS 作为兜底 | 公网域名照常用本地解析 |
+| 上游不可用 | 自动切备用（先主后备，最后系统） | |
+
+实现细节：UDP + TCP 双栈（大响应按 TC 位让客户端改用 TCP）、按 qname+qtype 缓存
+（TTL 取响应最小值，限制在 5s–10min）、单查询 4 秒超时。
+
+```bash
+dig +short @127.0.0.1 -p 10053 www.bytedance.net     # 内网：走隧道
+dig +short @127.0.0.1 -p 10053 www.apple.com         # 公网：走系统 DNS
+dig +tcp +short @127.0.0.1 -p 10053 www.bytedance.net
+```
+
+面板 `/api/status` 里的 `dns_addr` 会显示实际监听地址；Docker 镜像已暴露 10053/tcp 与 10053/udp。
 
 ## 设备证明（DPoP）
 

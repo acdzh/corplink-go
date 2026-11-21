@@ -23,6 +23,7 @@ import (
 	"github.com/acdzh/corplink-go/corplink/api"
 	"github.com/acdzh/corplink-go/corplink/clock"
 	"github.com/acdzh/corplink-go/corplink/config"
+	"github.com/acdzh/corplink-go/corplink/dnsserver"
 	"github.com/acdzh/corplink-go/corplink/dpop"
 	"github.com/acdzh/corplink-go/corplink/login"
 	"github.com/acdzh/corplink-go/corplink/proxy"
@@ -87,6 +88,8 @@ type Options struct {
 	TUNFD int
 	// ProxyListen 是混合代理监听地址；与配置都为空时不启动代理。
 	ProxyListen string
+	// DNSListen 是本地 DNS 监听地址；为空时用配置值（默认 127.0.0.1:10053）。
+	DNSListen string
 	// AutoNode 是启动后自动连接的节点名，留空则不自动连接。
 	AutoNode string
 	// Keepalive 覆盖配置里的保活间隔。
@@ -109,6 +112,10 @@ type Client struct {
 	proxyAddr string
 	// proxyLn 是代理监听器，Close 时关闭。
 	proxyLn net.Listener
+	// dns 是本地 DNS 服务，未启用时为 nil。
+	dns *dnsserver.Server
+	// dnsAddr 是本地 DNS 实际监听地址。
+	dnsAddr string
 	// cancel 停止后台循环。
 	cancel context.CancelFunc
 	// runCtx 是 Start 建立的后台循环上下文，代理日志用它判断是否已停止。
@@ -260,6 +267,13 @@ func (c *Client) Start(ctx context.Context) error {
 	// 推送长连接：接收 MFA 审批与踢线/配置变更通知，断线自动重连。
 	go c.agent.RunWebSocket(runCtx)
 
+	// 本地 DNS：官方客户端在 53 提供同样的东西，我们用 10053，
+	// 内网域名走隧道内 DNS，其余走系统 DNS。
+	if err := c.startDNS(); err != nil {
+		c.log.Warn("启动本地 DNS 失败", "err", err)
+		c.agent.LogEvent("warn", "本地 DNS 启动失败: %v", err)
+	}
+
 	// 代理是可选能力：没有显式地址（选项或配置）就不开端口。
 	proxyListen := firstNonEmpty(c.opts.ProxyListen, c.cfg.SocksListen)
 	if proxyListen == "" {
@@ -309,6 +323,10 @@ func (c *Client) Close(_ context.Context) error {
 	}
 	c.agent.Disconnect()
 	c.StopProxy()
+	if c.dns != nil {
+		_ = c.dns.Close()
+		c.dns = nil
+	}
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -356,6 +374,8 @@ type Status struct {
 	Kicked bool `json:"kicked"`
 	// KickReason 是终止原因。
 	KickReason string `json:"kick_reason,omitempty"`
+	// DNSAddr 是本地 DNS 监听地址。
+	DNSAddr string `json:"dns_addr,omitempty"`
 }
 
 // Status 汇总当前状态。
@@ -378,6 +398,7 @@ func (c *Client) Status() Status {
 		DpopNeedCode: needCode,
 		Kicked:       kicked,
 		KickReason:   kickReason,
+		DNSAddr:      c.dnsAddr,
 	}
 }
 
@@ -653,6 +674,35 @@ func (c *Client) ClashProfile() string {
 		DynamicDomains: c.agent.DynamicDomains(),
 		VPNDNS:         c.agent.VPNDNS(),
 	})
+}
+
+// startDNS 启动本地 DNS 服务。
+func (c *Client) startDNS() error {
+	listen := firstNonEmpty(c.opts.DNSListen, c.cfg.DNSListen)
+	if listen == "" {
+		return nil
+	}
+	server := dnsserver.New(dnsserver.Options{
+		Listen:       listen,
+		Dial:         c.agent.DialContext,
+		UpstreamFunc: c.agent.VPNDNS,
+		SplitFunc: func() []string {
+			return append(append([]string{}, c.agent.Domains()...), c.agent.DynamicDomains()...)
+		},
+	})
+	if err := server.Start(); err != nil {
+		return err
+	}
+	c.dns = server
+	c.dnsAddr = server.Addr()
+	c.log.Info("本地 DNS 已启动", "addr", c.dnsAddr)
+	c.agent.LogEvent("info", "本地 DNS 已启动: %s（内网域名走隧道）", c.dnsAddr)
+	return nil
+}
+
+// DNSAddr 返回本地 DNS 监听地址，未启用时为空。
+func (c *Client) DNSAddr() string {
+	return c.dnsAddr
 }
 
 // proxyHostPort 返回订阅里要写的代理地址。

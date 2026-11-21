@@ -25,6 +25,6 @@ FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/corplink /usr/local/bin/corplink
 USER nonroot:nonroot
 VOLUME ["/data"]
-EXPOSE 3710 13140
+EXPOSE 3710 13140 10053/tcp 10053/udp
 ENTRYPOINT ["/usr/local/bin/corplink"]
-CMD ["serve", "-config", "/data/config.json", "-proxy", "0.0.0.0:3710", "-panel", "0.0.0.0:13140"]
+CMD ["serve", "-config", "/data/config.json", "-proxy", "0.0.0.0:3710", "-panel", "0.0.0.0:13140", "-dns", "0.0.0.0:10053"]

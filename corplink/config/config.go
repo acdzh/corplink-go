@@ -88,6 +88,9 @@ type Config struct {
 	PreferNode string `json:"prefer_node,omitempty"`
 	// SocksListen 是用户态代理监听地址。
 	SocksListen string `json:"socks5_listen,omitempty"`
+	// DNSListen 是本地 DNS 服务监听地址；留空表示不启动。
+	// 官方客户端在 53 端口提供同样的服务，我们用 10053 避免与系统解析器抢端口。
+	DNSListen string `json:"dns_listen,omitempty"`
 	// LogLevel 控制日志详细程度。
 	LogLevel string `json:"log_level,omitempty"`
 }
@@ -107,6 +110,7 @@ func Default() *Config {
 		BuildNumber: "2485",
 		Language:    "zh",
 		PanelListen: "127.0.0.1:13140",
+		DNSListen:   "127.0.0.1:10053",
 		LogLevel:    "info",
 	}
 }
