@@ -3,7 +3,8 @@ package api
 import (
 	"net/url"
 	"strconv"
-	"time"
+
+	"github.com/acdzh/corplink-go/corplink/clock"
 )
 
 // 客户端伪装参数：与官方 Android 客户端保持一致的版本号。
@@ -26,6 +27,9 @@ type Endpoint struct {
 	Path string
 	// SigningInputParams 为 0 表示不需要签名；否则是服务端下发的位掩码。
 	SigningInputParams uint64
+	// NeedsDPoP 表示该接口还要带 DPoP 设备证明（jwt-token 之外的二次证明）。
+	// 官方客户端只给 /api/vpn/list 与 /vpn/conn 加这个头。
+	NeedsDPoP bool
 }
 
 // 登录相关接口。
@@ -43,15 +47,29 @@ var (
 	EndpointMFAType       = Endpoint{Path: "/api/mfa/type"}
 	EndpointMFACodeSend   = Endpoint{Path: "/api/mfa/code/send"}
 	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify"}
+	EndpointLogout        = Endpoint{Path: "/api/logout"}
+	EndpointAgreement     = Endpoint{Path: "/api/v1/config/agreement"}
+	EndpointAgreementList = Endpoint{Path: "/api/v2/agreement/signlist"}
+	EndpointAgreementSign = Endpoint{Path: "/api/v2/agreement/sign"}
 	EndpointMFASend       = Endpoint{Path: "/api/v1/login/mfa/send"}
 	EndpointMFAVerify     = Endpoint{Path: "/api/v1/login/mfa/verify"}
 )
 
 // 隧道相关接口，签名参数取自服务端 http_sign_config。
+//
+// NeedsDPoP 对应官方客户端的 DpopRequestContext：只有这两个路径会被插入设备证明。
+// 其中 /api/vpn/list 的证明是整套 DPoP 的引导点——会话绑定设备公钥后，
+// 带证明请求列表，服务端才会下发带 cnf.jwk 的 vpn-token。
 var (
-	EndpointVPNList   = Endpoint{Path: "/api/vpn/list", SigningInputParams: 510}
-	EndpointVPNConn   = Endpoint{Path: "/vpn/conn", SigningInputParams: 542}
+	EndpointVPNList   = Endpoint{Path: "/api/vpn/list", SigningInputParams: 510, NeedsDPoP: true}
+	EndpointVPNConn   = Endpoint{Path: "/vpn/conn", SigningInputParams: 542, NeedsDPoP: true}
 	EndpointVPNReport = Endpoint{Path: "/vpn/report"}
+)
+
+// 设备密钥（DPoP）相关接口。
+var (
+	// EndpointDpopStatus 查询本设备密钥的登记状态。
+	EndpointDpopStatus = Endpoint{Path: "/api/v1/device/dpop"}
 )
 
 // Meta 是随每个请求上报的客户端元信息。
@@ -91,6 +109,6 @@ func (m Meta) Query() url.Values {
 		"brand":            {m.Brand},
 		"language":         {m.Language},
 		"client_source":    {m.ClientSource},
-		"timestamp":        {strconv.FormatInt(time.Now().Unix(), 10)},
+		"timestamp":        {strconv.FormatInt(clock.Now().Unix(), 10)},
 	}
 }

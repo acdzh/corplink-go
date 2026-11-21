@@ -14,7 +14,7 @@ corplink/  库：登录、签名、隧道、代理、订阅、TOTP —— 只依
 ## 它能做什么
 
 - **登录与保活**：PKCE 第三方授权（SSO / 飞书）+ 二次验证（邮箱 / 短信 / 自动 TOTP），会话自动保存与保活
-- **协议与隧道**：按服务端规则对请求签名（HKDF + HMAC + protobuf 头），拉取节点并建立 WireGuard 隧道（支持 UDP 与 TCP 分帧）
+- **协议与隧道**：按服务端规则对请求签名（HKDF + HMAC + protobuf 头 + DPoP 设备证明），拉取节点并建立 WireGuard 隧道（支持 UDP 与 TCP 分帧）
 - **混合代理**：本机单端口同时提供 SOCKS5 与 HTTP 代理，不设用户名密码
 - **Web 控制面板**：连接/断开/自动选路/单节点与全量测速/节点搜索与标签筛选/分流规则校验/TOTP 倒计时与复制/实时流量速率与峰值/登录向导/运行日志/动态配置
 - **Clash 订阅**：生成防回环的 Clash 配置，分流规则由服务端下发并交给 Clash 执行
@@ -89,6 +89,7 @@ DNS 使用 fake-ip，内网域名不依赖本机 DNS。
 | `corplink connect` | 打印指定节点的隧道参数，便于排障 |
 | `corplink serve` | 启动守护进程：混合代理 + Web 控制面板 |
 | `corplink probe` | 探测企业信息与登录配置 |
+| `corplink dpop` | 查看设备密钥登记状态；`-register` 补做一次登记并换取 vpn-token |
 
 ## 配置与数据
 
@@ -96,12 +97,63 @@ DNS 使用 fake-ip，内网域名不依赖本机 DNS。
 
 ```
 <data-dir>/（默认 ~/.corplink-go）
-├── config.json   非敏感配置、设备标识与运行选项
-└── session.json  Cookie 与登录态（0600，切勿提交）
+├── config.json        非敏感配置、设备标识与运行选项
+├── session.json       Cookie 与登录态（0600，切勿提交）
+└── dpop/
+    └── device_key.json  ES256 设备私钥（0600，单独存放，切勿提交）
 ```
+
+设备私钥刻意不放进 `config.json` / `session.json`：那两份是明文 JSON，
+混进去等于把长寿命私钥直接暴露；分开存放也让"换个会话继续用同一把设备密钥"成立。
 
 TOTP secret 存在 `config.json` 的 `code` 字段（登录成功后自动写入）。
 Docker 下默认数据目录为 `/data`。
+
+## 设备证明（DPoP）
+
+飞连 2026 年起给部分租户启用了设备证明：服务端只给"能证明自己持有某对 ES256
+设备私钥"的会话签发 `vpn-token`，token 的 `val` 段里带
+`auth_scheme=device-pop-es256-v1` 与 `cnf.jwk`（设备公钥）。没有 `vpn-token`
+时 `/vpn/conn` 固定失败在 `3015`（"Session 无效"）。
+
+完整链路（全部按官方 Android 客户端反编译实现，见 `corplink/dpop`）：
+
+1. **生成并持久化 ES256（P-256）密钥**，`device_key_id = <device_id>_<uuid>`，
+   uuid 由客户端生成；私钥落在 `<data-dir>/dpop/device_key.json`（0600）。
+2. **登记公钥**：登录成功后用 `mfa_scene=device_key` 做一次二次认证，
+   校验请求体带上
+   `device_key_id` / `device_key_protected_level` / `device_public_key`。
+   otp 是本地动态码，**不需要**先调 `/api/mfa/code/send`（调了会回 3021）。
+3. **换取 vpn-token**：绑定成功后带一份 DPoP 证明请求 `/api/vpn/list`，
+   服务端这时才 `Set-Cookie` 下发带 `cnf.jwk` 的 `vpn-token`。
+4. **带证明连接**：`/vpn/conn` 除 `sign` 与 `jwt-token` 外再带 `DPoP` 头。
+
+证明是一份 ES256 紧凑 JWT，header 固定
+`{"typ":"dpop+jwt","alg":"ES256","kid":"<device_key_id>"}`，两类 claim：
+
+| 接口 | claim | 说明 |
+| --- | --- | --- |
+| `GET /api/vpn/list` | `htm` `iat` `jti` `ath` `htu` `query_hash` `body_hash` | `ath` 覆盖 **session** cookie；`htu` 去掉 query；`query_hash` 按 key 排序归一化后取哈希 |
+| `POST /vpn/conn` | `htm` `iat` `jti` `ath` `ver` `htp` `wgh` `body_hash` | `ath` 覆盖 **vpn-token**；`ver=vpn-pop-es256-v1`；`wgh` 是本次 WireGuard 公钥原文的 SHA-256 |
+
+### 自动续期与自愈
+
+- **vpn-token**（14 天）：只在请求 `/api/vpn/list` 时续签。保活循环每轮检查余量，
+  剩余不足 48 小时就换一张并落盘；启动、登录、手动刷新节点时也会顺手续签。
+- **连接失败自愈**：`/vpn/conn` 返回 `3015` / `10220018` / `10420003~10420006`
+  时自动换票后重试一次；返回 `10220021`（服务端记的公钥与本机不一致）时先重新登记
+  设备密钥、再换票重试。对应官方客户端的 `DpopVpnRecovery`。
+- **session cookie**：飞连没有 refresh token，只有保活请求能让它保持活跃；服务端判定
+  过期（`101 登录已过期`）后必须重新走一次登录，这一步库不会替你完成 SSO。
+
+排障：
+
+```bash
+corplink dpop              # 本地 device_key_id / 服务端登记状态 / 是否已绑定
+corplink dpop -register    # 补做登记（本地有 TOTP secret 时全自动，无需手工输码）
+corplink dpop -json        # 机器可读
+curl "http://127.0.0.1:13140/api/dpop"   # 面板同款视图
+```
 
 ## Docker
 

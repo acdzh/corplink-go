@@ -1,0 +1,113 @@
+package agent
+
+// 连接上报（/vpn/report）。
+//
+// 官方客户端连上后立刻发 type=100，之后每 60 秒重发一次；断开发 type=101。
+// 这个接口同时是唯一的"被踢线"信号：响应 code=1000 表示服务端已把本端下线
+// （VpnReportOperator.java:51-53、VpnManagerImpl.java:1355-1371、:1230）。
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/acdzh/corplink-go/corplink/api"
+)
+
+// 上报类型。
+const (
+	// reportConnect 表示连接成功。
+	reportConnect = "100"
+	// reportDisconnect 表示断开。
+	reportDisconnect = "101"
+	// reportInterval 是连接期间的周期重报间隔。
+	reportInterval = 60 * time.Second
+	// codeReportKicked 是服务端用来通知"你已被顶下线"的业务码。
+	codeReportKicked = 1000
+)
+
+// startReport 启动连接上报循环。
+func (a *Agent) startReport(plan *Plan) {
+	if plan == nil {
+		return
+	}
+	a.stopReport(false)
+	a.mu.Lock()
+	stop := make(chan struct{})
+	a.reportStop = stop
+	a.reportNode = plan.node
+	a.reportIP = plan.cfg.Addresses[0]
+	a.reportPubKey = plan.publicKey
+	a.reportMode = plan.mode.connMode()
+	a.mu.Unlock()
+
+	a.sendReport(reportConnect)
+	go func() {
+		ticker := time.NewTicker(reportInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				a.sendReport(reportConnect)
+			}
+		}
+	}()
+}
+
+// stopReport 停止上报循环，必要时补一条断开上报。
+func (a *Agent) stopReport(sendDisconnect bool) {
+	a.mu.Lock()
+	stop := a.reportStop
+	a.reportStop = nil
+	a.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	if sendDisconnect {
+		a.sendReport(reportDisconnect)
+	}
+}
+
+// sendReport 发一次上报；响应 code=1000 视为被踢下线。
+func (a *Agent) sendReport(typ string) {
+	a.mu.RLock()
+	node := a.reportNode
+	ip := a.reportIP
+	pub := a.reportPubKey
+	mode := a.reportMode
+	a.mu.RUnlock()
+	if node.IP == "" {
+		return
+	}
+	client, err := api.New(api.Options{
+		Server:             fmt.Sprintf("https://%s:%d", node.IP, node.APIPort),
+		DeviceID:           a.cfg.DeviceID,
+		Language:           a.cfg.Language,
+		InsecureSkipVerify: true,
+		Meta:               a.meta,
+		Verbose:            a.verbose,
+	})
+	if err != nil {
+		return
+	}
+	client.SetCookies(a.client.Cookies())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	env, err := client.Do(ctx, api.EndpointVPNReport, nil, map[string]string{
+		"type":       typ,
+		"ip":         ip,
+		"public_key": pub,
+		"mode":       mode,
+	})
+	if err != nil {
+		a.addEvent("warn", "连接上报失败（%s）: %v", typ, err)
+		return
+	}
+	if env.Code == codeReportKicked {
+		a.addEvent("warn", "服务端已终止本端连接（report code=1000）")
+		a.handleKicked(fmt.Errorf("连接被服务端终止（report 1000）"))
+	}
+}

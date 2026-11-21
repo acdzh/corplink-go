@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/acdzh/corplink-go/corplink/api"
+	"github.com/acdzh/corplink-go/corplink/clock"
 )
 
 // Platform 表示飞连的登录方式。当前只实现 TPS（飞书/SSO 扫码）与密码。
@@ -65,6 +66,9 @@ type Config struct {
 	ActivateCode string `json:"activate_code,omitempty"`
 	// Code 是 TOTP secret（base32），登录后由服务端下发。
 	Code string `json:"code,omitempty"`
+	// TimeDiffMS 是「服务端时间 - 本机时间」的毫秒偏移，由响应 Date 头校准后落盘。
+	// 它的作用与官方客户端的 otp_time_diff 一致：TOTP 与 DPoP 的 iat 都要叠加。
+	TimeDiffMS int64 `json:"time_diff_ms,omitempty"`
 
 	// Mode 是连接模式：auto 表示自动选最快节点，其它值为固定节点名。
 	Mode string `json:"mode,omitempty"`
@@ -123,6 +127,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("解析配置 %s: %w", path, err)
 	}
 	cfg.path = path
+	// 恢复上次校准出来的时钟偏移，避免重启后第一次 TOTP/DPoP 就用错时间。
+	clock.SetOffsetMS(cfg.TimeDiffMS)
 	return cfg, nil
 }
 
@@ -136,6 +142,8 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
 		return fmt.Errorf("创建配置目录: %w", err)
 	}
+	// 落盘前把当前时钟偏移写进配置，下次启动直接可用。
+	c.TimeDiffMS = clock.OffsetMS()
 	payload, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化配置: %w", err)
@@ -161,6 +169,26 @@ func (c *Config) SessionPath() string {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(c.path), "session.json")
+}
+
+// DPoPDir 返回设备密钥目录，与配置文件同目录下的 dpop/。
+func (c *Config) DPoPDir() string {
+	if c.path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(c.path), "dpop")
+}
+
+// DPoPKeyPath 返回设备私钥文件路径；内存模式下返回空串（密钥只在内存里）。
+//
+// 私钥刻意与 config.json / session.json 分开落盘：后两者是明文 JSON，
+// 混进去等于把长寿命私钥直接暴露。
+func (c *Config) DPoPKeyPath() string {
+	dir := c.DPoPDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "device_key.json")
 }
 
 // EnsureDeviceID 保证配置里有 device_id。

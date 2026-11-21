@@ -104,7 +104,8 @@ func (c *Client) UpdateSettings(ctx context.Context, in Settings) ([]string, err
 		}
 	}
 	if cfg.ActivateCode != oldActivate || cfg.CompanyName != oldCompany {
-		c.api.SetSigner(sign.NewSigner(activateOf(cfg), cfg.DeviceID))
+		// 签名器与设备证明一起重挂，保证两条凭证始终指向同一份配置。
+		c.dpop.Attach(c.api, sign.NewSigner(activateOf(cfg), cfg.DeviceID))
 	}
 
 	if in.ProxyListen != nil {

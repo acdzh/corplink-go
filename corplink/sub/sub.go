@@ -38,6 +38,10 @@ type Options struct {
 	// NodeIPs 是节点公网 IP（含备用），必须直连：
 	// 否则 Clash 在 TUN 模式下会把本程序的出站流量再送回代理，形成回环。
 	NodeIPs []string
+	// DynamicDomains 是需要走隧道/内网解析的动态域名（vpn_dynamic_domain_route_split 展开）。
+	DynamicDomains []string
+	// VPNDNS 是内网 DNS，用于给内网域名单独指定解析服务器。
+	VPNDNS []string
 }
 
 // Clash 生成 Clash 配置。
@@ -61,6 +65,23 @@ func Clash(opts Options) string {
 		"fake-ip-range": "198.18.0.1/16",
 		"nameserver":    []string{"223.5.5.5", "119.29.29.29"},
 		"fallback":      []string{"1.1.1.1", "8.8.8.8"},
+	}
+	// 内网域名必须由隧道内 DNS 解析：否则公司域名在公网 DNS 上直接 NXDOMAIN，
+	// 表现为"连上了但公司站点打不开"。官方同样把 vpn_dns 绑到这些后缀上。
+	if len(opts.VPNDNS) > 0 && (len(opts.Domains) > 0 || len(opts.DynamicDomains) > 0) {
+		policy := map[string]any{}
+		for _, dnsIP := range opts.VPNDNS {
+			for _, domain := range append(append([]string{}, opts.Domains...), opts.DynamicDomains...) {
+				domain = strings.TrimSpace(domain)
+				if domain == "" || strings.HasPrefix(domain, "*.") {
+					continue
+				}
+				policy["+."+domain] = []string{dnsIP}
+			}
+		}
+		if len(policy) > 0 {
+			dns["nameserver-policy"] = policy
+		}
 	}
 
 	rules := make([]string, 0, len(opts.Routes)+len(opts.Domains)+len(opts.NodeIPs)+len(opts.DirectDomains)+2)
@@ -104,7 +125,7 @@ func Clash(opts Options) string {
 		}
 		rules = append(rules, fmt.Sprintf("%s,%s,%s,no-resolve", kind, route, GroupName))
 	}
-	for _, domain := range opts.Domains {
+	for _, domain := range append(append([]string{}, opts.Domains...), opts.DynamicDomains...) {
 		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
 		if domain == "" || seen["domain:"+domain] {
 			continue

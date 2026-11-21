@@ -6,6 +6,7 @@ replace golang.zx2c4.com/wireguard => github.com/PinkD/wireguard-go v0.0.0-20260
 
 require (
 	github.com/egoist/mygo v0.10.0
+	golang.org/x/net v0.63.0
 	golang.zx2c4.com/wireguard v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -20,7 +21,6 @@ require (
 	golang.org/x/image v0.48.0 // indirect
 	golang.org/x/mobile v0.0.0-20261117202452-47699113848a // indirect
 	golang.org/x/mod v0.43.0 // indirect
-	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

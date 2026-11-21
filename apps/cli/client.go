@@ -7,6 +7,7 @@ import (
 
 	"github.com/acdzh/corplink-go/corplink/api"
 	"github.com/acdzh/corplink-go/corplink/config"
+	"github.com/acdzh/corplink-go/corplink/dpop"
 	"github.com/acdzh/corplink-go/corplink/sign"
 )
 
@@ -34,13 +35,25 @@ func newClient(cfg *config.Config, verbose bool) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	activate := cfg.ActivateCode
-	if activate == "" {
-		// 该租户的 activate_code 与公司代码一致；缺失时按公司代码兜底。
-		activate = cfg.CompanyName
-	}
-	client.SetSigner(signerFor(activate, cfg.DeviceID))
+	dpopStore(cfg).Attach(client, signerFor(activateOf(cfg), cfg.DeviceID))
 	return client, nil
+}
+
+// activateOf 返回签名用的 activate_code：缺失时按公司代码兜底。
+func activateOf(cfg *config.Config) string {
+	if cfg.ActivateCode != "" {
+		return cfg.ActivateCode
+	}
+	return cfg.CompanyName
+}
+
+// dpopStore 打开设备密钥；失败时返回 nil，调用方据此退回无 DPoP 形态。
+func dpopStore(cfg *config.Config) *dpop.Store {
+	store, err := dpop.Open(cfg.DPoPKeyPath(), cfg.DeviceID)
+	if err != nil {
+		return nil
+	}
+	return store
 }
 
 // signerFor 生成绑定指定 activate_code 与 device_id 的签名器。

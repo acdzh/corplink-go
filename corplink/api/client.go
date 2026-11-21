@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/acdzh/corplink-go/corplink/clock"
 )
 
 // matchBaseURL 是公司代码解析服务，与具体企业的服务端地址无关。
@@ -30,6 +32,13 @@ const errNoServer = "未配置服务端地址，请先在设置中配置企业�
 // Signer 为需要签名的接口生成 sign 头。返回空串表示不添加该头。
 type Signer func(ep Endpoint, method string, u *url.URL, body []byte, cookie, csrf, jwt string) (string, error)
 
+// DPoPProver 为需要设备证明的接口生成 DPoP 头。
+//
+// session 与 vpnToken 分别是会话 cookie 与 vpn-token 的原文：
+// /api/vpn/list 的证明覆盖 session，/vpn/conn 的证明覆盖 vpn-token。
+// 返回空串表示本次不带证明（设备密钥尚未登记时官方客户端也这么做）。
+type DPoPProver func(ep Endpoint, method string, u *url.URL, body []byte, session, vpnToken string) (string, error)
+
 // Client 是飞连服务端的 HTTP 客户端，负责地址拼接、请求头、Cookie 与签名。
 type Client struct {
 	mu      sync.RWMutex
@@ -40,6 +49,7 @@ type Client struct {
 	device  string
 	meta    Meta
 	signer  Signer
+	prover  DPoPProver
 	verbose bool
 }
 
@@ -206,6 +216,13 @@ func (c *Client) SetSigner(s Signer) {
 	c.mu.Unlock()
 }
 
+// SetDPoP 注册设备证明器；只有 Endpoint.NeedsDPoP 的接口才会调用。
+func (c *Client) SetDPoP(p DPoPProver) {
+	c.mu.Lock()
+	c.prover = p
+	c.mu.Unlock()
+}
+
 // currentBase 安全读取当前服务端地址副本。
 func (c *Client) currentBase() *url.URL {
 	c.mu.RLock()
@@ -233,6 +250,15 @@ func (c *Client) Cookies() []*http.Cookie {
 		return nil
 	}
 	return c.http.Jar.Cookies(base)
+}
+
+// Cookie 返回当前会话里指定 Cookie 的值，不存在时返回空串。
+func (c *Client) Cookie(name string) string {
+	base := c.currentBase()
+	if base == nil || base.Host == "" {
+		return ""
+	}
+	return cookieValueOf(c.http.Jar.Cookies(base), name)
 }
 
 // SetCookies 注入已持久化的会话 Cookie。
@@ -307,8 +333,9 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	cookieHeader := cookieHeaderOf(c.http.Jar.Cookies(&u))
-	csrf := cookieValueOf(c.http.Jar.Cookies(&u), "csrf-token")
+	cookies := c.http.Jar.Cookies(&u)
+	cookieHeader := cookieHeaderOf(cookies)
+	csrf := cookieValueOf(cookies, "csrf-token")
 	if csrf != "" {
 		req.Header.Set("csrf-token", csrf)
 	}
@@ -320,7 +347,7 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		if signer == nil {
 			return nil, fmt.Errorf("接口 %s 需要签名，但未配置签名器", ep.Path)
 		}
-		jwt := cookieValueOf(c.http.Jar.Cookies(&u), "vpn-token")
+		jwt := cookieValueOf(cookies, "vpn-token")
 		sign, err := signer(ep, method, &u, payload, cookieHeader, csrf, jwt)
 		if err != nil {
 			return nil, fmt.Errorf("生成签名 %s: %w", ep.Path, err)
@@ -333,6 +360,22 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		}
 	}
 
+	// 设备证明独立于 v1 签名：前者证明"持有设备私钥"，后者证明"客户端身份"。
+	if ep.NeedsDPoP {
+		c.mu.RLock()
+		prover := c.prover
+		c.mu.RUnlock()
+		if prover != nil {
+			proof, err := prover(ep, method, &u, payload, cookieValueOf(cookies, "session"), cookieValueOf(cookies, "vpn-token"))
+			if err != nil {
+				return nil, fmt.Errorf("生成 DPoP 证明 %s: %w", ep.Path, err)
+			}
+			if proof != "" {
+				req.Header.Set("DPoP", proof)
+			}
+		}
+	}
+
 	if c.verbose {
 		fmt.Printf("[req] %s %s\n", method, u.String())
 	}
@@ -342,6 +385,10 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		return nil, fmt.Errorf("请求 %s: %w", ep.Path, err)
 	}
 	defer resp.Body.Close()
+
+	// 每次响应都顺手校准时钟：Date 头是最便宜的服务端时间来源，
+	// TOTP 与 DPoP 的 iat 都依赖它（官方客户端同样用 otp_time_diff 做这件事）。
+	clock.SyncFromDate(resp.Header.Get("Date"))
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
@@ -359,7 +406,28 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 	if err := json.Unmarshal(raw, env); err != nil {
 		return nil, fmt.Errorf("解析响应 %s: %w（正文 %q）", ep.Path, err, truncate(string(raw), 200))
 	}
+	// 业务体里带 timestamp 时优先用它（秒级整数，比 Date 头更贴近服务端逻辑时钟）。
+	syncFromPayload(env.Data)
+	if env.LoggedOut() {
+		return nil, env.KickedError()
+	}
 	return env, nil
+}
+
+// syncFromPayload 在响应 data 里找 timestamp 字段做校准。
+func syncFromPayload(data json.RawMessage) {
+	if len(data) == 0 {
+		return
+	}
+	var probe struct {
+		Timestamp int64 `json:"timestamp"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return
+	}
+	if probe.Timestamp > 0 {
+		clock.SyncFromUnix(probe.Timestamp)
+	}
 }
 
 // MatchCompany 用企业代码解析服务端地址。

@@ -28,17 +28,22 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		st := c.Status()
 		writeJSON(w, map[string]any{
-			"state":        st.State,
-			"logged_in":    st.LoggedIn,
-			"error":        st.Error,
-			"mfa_pending":  st.MFAPending,
-			"mode":         st.Mode,
-			"auto":         st.Auto,
-			"company_name": st.CompanyName,
-			"server":       st.Server,
-			"proxy_addr":   st.ProxyAddr,
-			"panel_addr":   s.PanelAddr,
-			"has_totp":     st.HasTOTP,
+			"state":          st.State,
+			"logged_in":      st.LoggedIn,
+			"error":          st.Error,
+			"mfa_pending":    st.MFAPending,
+			"mode":           st.Mode,
+			"auto":           st.Auto,
+			"company_name":   st.CompanyName,
+			"server":         st.Server,
+			"proxy_addr":     st.ProxyAddr,
+			"panel_addr":     s.PanelAddr,
+			"has_totp":       st.HasTOTP,
+			"dpop_key_id":    st.DpopKeyID,
+			"dpop_bound":     st.DpopBound,
+			"dpop_need_code": st.DpopNeedCode,
+			"kicked":         st.Kicked,
+			"kick_reason":    st.KickReason,
 		})
 	})
 	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, _ *http.Request) {
@@ -274,6 +279,37 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 		writeJSON(w, map[string]string{
 			"url": fmt.Sprintf("http://%s/clash.yml", s.PanelAddr),
 		})
+	})
+	mux.HandleFunc("/api/dpop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "只支持 GET", http.StatusMethodNotAllowed)
+			return
+		}
+		info, err := c.LoginDpopInfo(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, info)
+	})
+	mux.HandleFunc("/api/dpop/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&in)
+		}
+		info, err := c.LoginRegisterDpop(r.Context(), in.Type, in.Code)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, info)
 	})
 }
 

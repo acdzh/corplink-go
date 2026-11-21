@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/acdzh/corplink-go/corplink/api"
 )
@@ -113,7 +114,18 @@ func (s *Service) MfaType(ctx context.Context, scene string) (*api.MfaType, erro
 
 // MfaCodeSend 用 MFA v2 接口下发验证码。
 func (s *Service) MfaCodeSend(ctx context.Context, scene, codeType string) error {
-	body := map[string]string{"mfa_scene": scene, "code_type": codeType}
+	return s.MfaCodeSendExtra(ctx, scene, codeType, nil)
+}
+
+// MfaCodeSendExtra 在下发验证码时附带额外字段。
+//
+// 设备密钥登记走的就是这套接口（scene=device_key），官方客户端在这里
+// 只发 mfa_scene + code_type，设备字段留到校验时才带。
+func (s *Service) MfaCodeSendExtra(ctx context.Context, scene, codeType string, extra map[string]any) error {
+	body := map[string]any{"mfa_scene": scene, "code_type": codeType}
+	for k, v := range extra {
+		body[k] = v
+	}
 	env, err := s.client.Do(ctx, api.EndpointMFACodeSend, nil, body)
 	if err != nil {
 		return err
@@ -126,7 +138,29 @@ func (s *Service) MfaCodeSend(ctx context.Context, scene, codeType string) error
 
 // MfaCodeVerify 用 MFA v2 接口校验验证码，成功后登录态才有效。
 func (s *Service) MfaCodeVerify(ctx context.Context, scene, codeType, code string) (json.RawMessage, error) {
-	body := map[string]string{"mfa_scene": scene, "code_type": codeType, "code": code}
+	return s.MfaCodeVerifyExtra(ctx, scene, codeType, code, nil)
+}
+
+// MfaCodeVerifyExtra 在校验验证码时附带额外字段。
+//
+// 官方客户端的请求体固定为
+//
+//	{mfa_scene, code_type, action: <同一个 scene>, code, device_key_id,
+//	 device_key_protected_level, device_public_key}
+//
+// action 与 mfa_scene 取同值是设备密钥登记能落地的关键。
+func (s *Service) MfaCodeVerifyExtra(ctx context.Context, scene, codeType, code string, extra map[string]any) (json.RawMessage, error) {
+	body := map[string]any{
+		"mfa_scene": scene,
+		"code_type": codeType,
+		"code":      code,
+	}
+	if scene != "" {
+		body["action"] = scene
+	}
+	for k, v := range extra {
+		body[k] = v
+	}
 	env, err := s.client.Do(ctx, api.EndpointMFACodeVerify, nil, body)
 	if err != nil {
 		return nil, err
@@ -135,6 +169,25 @@ func (s *Service) MfaCodeVerify(ctx context.Context, scene, codeType, code strin
 		return nil, env.Error()
 	}
 	return env.Data, nil
+}
+
+// DpopStatus 查询本设备的密钥登记状态。
+func (s *Service) DpopStatus(ctx context.Context) (*api.DpopStatus, error) {
+	env, err := s.client.Do(ctx, api.EndpointDpopStatus, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	out := &api.DpopStatus{}
+	if len(env.Data) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(env.Data, out); err != nil {
+		return nil, fmt.Errorf("解析设备密钥状态: %w", err)
+	}
+	return out, nil
 }
 
 // MfaSend 触发一次登录 MFA 验证码下发。loginScene 一般是 feilian，mfaType 为 email 或 mobile。
@@ -177,4 +230,84 @@ func (s *Service) OTP(ctx context.Context) (*api.OtpInfo, error) {
 		return nil, fmt.Errorf("解析 OTP 信息: %w", err)
 	}
 	return out, nil
+}
+
+// Logout 通知服务端注销当前会话。
+//
+// 不调它的代价是服务端会话残留：退出后立刻重登可能被 self_kick_out 反踢，
+// 多设备场景还会占满并发名额（s1.java:63、tf0.java:35）。
+func (s *Service) Logout(ctx context.Context, all bool) error {
+	q := url.Values{}
+	if all {
+		q.Set("logout_all", "true")
+	}
+	env, err := s.client.Do(ctx, api.EndpointLogout, q, nil)
+	if err != nil {
+		return err
+	}
+	if !env.OK() && !env.LoggedOut() {
+		return env.Error()
+	}
+	return nil
+}
+
+// Agreement 返回当前租户的协议条款与签署状态。
+func (s *Service) Agreement(ctx context.Context) (*api.AgreementConfig, error) {
+	env, err := s.client.Do(ctx, api.EndpointAgreement, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !env.OK() {
+		return nil, env.Error()
+	}
+	out := &api.AgreementConfig{}
+	if len(env.Data) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(env.Data, out); err != nil {
+		return nil, fmt.Errorf("解析协议条款: %w", err)
+	}
+	return out, nil
+}
+
+// AgreementPending 返回尚未签署的协议标识。
+func (s *Service) AgreementPending(ctx context.Context) ([]string, error) {
+	cfg, err := s.Agreement(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.EmployeeAgreementEnable && !cfg.GuestAgreementEnable {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(cfg.AgreementList))
+	for _, item := range cfg.AgreementList {
+		if item.IsRequired && !item.Signed {
+			keys = append(keys, strconv.Itoa(item.ID))
+		}
+	}
+	return keys, nil
+}
+
+// SignAgreement 批量签署协议；keys 为空表示全部。
+func (s *Service) SignAgreement(ctx context.Context, keys []string) error {
+	body := map[string]any{"keys": keys}
+	env, err := s.client.Do(ctx, api.EndpointAgreementSign, nil, body)
+	if err != nil {
+		return err
+	}
+	if !env.OK() {
+		return env.Error()
+	}
+	return nil
+}
+
+// VPNMfaType 查询连接（vpn）场景可用的二次认证方式。
+func (s *Service) VPNMfaType(ctx context.Context) (*api.MfaType, error) {
+	return s.MfaType(ctx, "vpn")
+}
+
+// VerifyMfaCode 用 MFA v2 接口校验任意场景的验证码（连接期认证也走这里）。
+func (s *Service) VerifyMfaCode(ctx context.Context, scene, codeType, code string, extra map[string]any) error {
+	_, err := s.MfaCodeVerifyExtra(ctx, scene, codeType, code, extra)
+	return err
 }

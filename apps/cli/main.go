@@ -56,6 +56,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "serve 失败:", err)
 			os.Exit(1)
 		}
+	case "dpop":
+		if err := runDpop(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "dpop 失败:", err)
+			os.Exit(1)
+		}
 	case "version", "-v", "--version":
 		fmt.Println("corplink-go", version)
 	case "help", "-h", "--help":
@@ -74,6 +79,7 @@ func usage() {
   corplink-go list    [-config <path>] [-v]
   corplink-go connect [-config <path>] [-name <node>] [-v]
   corplink-go serve   [-config <path>] [-proxy 127.0.0.1:3710] [-panel 127.0.0.1:13140] [-name <node>] [-keepalive 30m] [-v]
+  corplink-go dpop    [-config <path>] [-register] [-type otp] [-code <code>] [-json]
   corplink-go version
 `)
 }

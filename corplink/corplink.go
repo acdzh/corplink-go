@@ -21,7 +21,9 @@ import (
 
 	"github.com/acdzh/corplink-go/corplink/agent"
 	"github.com/acdzh/corplink-go/corplink/api"
+	"github.com/acdzh/corplink-go/corplink/clock"
 	"github.com/acdzh/corplink-go/corplink/config"
+	"github.com/acdzh/corplink-go/corplink/dpop"
 	"github.com/acdzh/corplink-go/corplink/login"
 	"github.com/acdzh/corplink-go/corplink/proxy"
 	"github.com/acdzh/corplink-go/corplink/sign"
@@ -99,6 +101,7 @@ type Client struct {
 	api   *api.Client
 	agent *agent.Agent
 	login *login.Service
+	dpop  *dpop.Store
 	log   *slog.Logger
 	opts  Options
 
@@ -152,7 +155,13 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiClient.SetSigner(sign.NewSigner(activateOf(cfg), cfg.DeviceID))
+	// 设备密钥与 v1 签名同时挂上：前者决定能不能拿到 vpn-token，
+	// 后者决定服务端认不认这个客户端。
+	dpopStore, err := dpop.Open(cfg.DPoPKeyPath(), cfg.DeviceID)
+	if err != nil {
+		logger.Warn("加载设备密钥失败，DPoP 不可用", "err", err)
+	}
+	dpopStore.Attach(apiClient, sign.NewSigner(activateOf(cfg), cfg.DeviceID))
 	if err := loadSession(apiClient, cfg); err != nil {
 		// 未登录不阻塞启动：端侧可以完成登录。
 		logger.Info("未加载会话", "reason", err)
@@ -166,13 +175,30 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		TUN:          provider,
 		Logger:       logger,
 		DeviceLogger: newDeviceLogger(logger, opts.Verbose),
+		DPoP:         dpopStore,
+		Verbose:      opts.Verbose,
 	})
 
+	loginSvc := login.New(apiClient, cfg, ag, dpopStore)
+	// 连接期二次认证与"会话被终止"都交给登录层处理：前者要算 TOTP，
+	// 后者要清 cookie 与本地会话文件。
+	ag.SetSolveVPNMFA(loginSvc.SolveVPNMFA)
+	ag.SetOnKicked(loginSvc.MarkKicked)
+	// 连接失败时按错误码自愈：先换票，必要时重新登记设备密钥。
+	ag.SetRecover(func(ctx context.Context, code int, mode agent.RecoveryMode) error {
+		if mode == agent.RecoveryReconcile {
+			if _, err := loginSvc.RegisterDeviceKey(ctx, "", ""); err != nil {
+				return err
+			}
+		}
+		return loginSvc.RefreshVPNToken(ctx)
+	})
 	return &Client{
 		cfg:   cfg,
 		api:   apiClient,
 		agent: ag,
-		login: login.New(apiClient, cfg, ag),
+		login: loginSvc,
+		dpop:  dpopStore,
 		log:   logger,
 		opts:  opts,
 	}, nil
@@ -189,9 +215,19 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cancel = cancel
 	c.runCtx = runCtx
 
+	// 先探一次租户能力：强制 ZTNA 或需要设备信任时给出明确提示，
+	// 避免"登录成功但连不上/节点为空"这种无解释的失败。
+	c.probeTenantCapabilities(runCtx)
+
 	// 拉取一次节点列表：失败（未登录、会话过期）只记事件，不阻塞后续。
+	// 这一步同时是 DPoP 的续签点：已登记设备密钥的会话会在这里拿到新的 vpn-token，
+	// 所以刷完要把 Cookie 落盘，避免重启后又回到"没有 vpn-token"的状态。
 	if err := c.agent.RefreshNodes(runCtx); err != nil {
 		c.log.Info("拉取节点列表失败", "err", err)
+	} else if path := c.cfg.SessionPath(); path != "" {
+		if err := c.api.SaveCookies(path); err != nil {
+			c.log.Warn("保存会话失败", "err", err)
+		}
 	}
 
 	latencyInterval := time.Duration(c.cfg.AutoModeIntervalSeconds) * time.Second
@@ -221,6 +257,8 @@ func (c *Client) Start(ctx context.Context) error {
 		go c.agent.Keepalive(runCtx, keepalive)
 	}
 	go c.agent.Watchdog(runCtx, watchdogInterval)
+	// 推送长连接：接收 MFA 审批与踢线/配置变更通知，断线自动重连。
+	go c.agent.RunWebSocket(runCtx)
 
 	// 代理是可选能力：没有显式地址（选项或配置）就不开端口。
 	proxyListen := firstNonEmpty(c.opts.ProxyListen, c.cfg.SocksListen)
@@ -308,21 +346,38 @@ type Status struct {
 	ProxyAddr string `json:"proxy_addr"`
 	// HasTOTP 表示本地是否保存了 TOTP secret。
 	HasTOTP bool `json:"has_totp"`
+	// DpopKeyID 是本地设备密钥的 device_key_id。
+	DpopKeyID string `json:"dpop_key_id"`
+	// DpopBound 表示服务端已接受该设备公钥（能签发 vpn-token）。
+	DpopBound bool `json:"dpop_bound"`
+	// DpopNeedCode 表示设备密钥登记还在等验证码。
+	DpopNeedCode bool `json:"dpop_need_code"`
+	// Kicked 表示会话被服务端终止，需要重新登录。
+	Kicked bool `json:"kicked"`
+	// KickReason 是终止原因。
+	KickReason string `json:"kick_reason,omitempty"`
 }
 
 // Status 汇总当前状态。
 func (c *Client) Status() Status {
+	keyID, bound, needCode, _ := c.login.DeviceKeyState()
+	kicked, kickReason := c.login.Kicked()
 	return Status{
-		State:       c.agent.State(),
-		LoggedIn:    c.agent.LoggedIn(),
-		Error:       c.agent.LastError(),
-		MFAPending:  c.login.Pending(),
-		Mode:        c.agent.Mode(),
-		Auto:        c.agent.Auto(),
-		CompanyName: c.cfg.CompanyName,
-		Server:      c.cfg.Server,
-		ProxyAddr:   c.proxyAddr,
-		HasTOTP:     c.cfg.Code != "",
+		State:        c.agent.State(),
+		LoggedIn:     c.agent.LoggedIn(),
+		Error:        c.agent.LastError(),
+		MFAPending:   c.login.Pending(),
+		Mode:         c.agent.Mode(),
+		Auto:         c.agent.Auto(),
+		CompanyName:  c.cfg.CompanyName,
+		Server:       c.cfg.Server,
+		ProxyAddr:    c.proxyAddr,
+		HasTOTP:      c.cfg.Code != "",
+		DpopKeyID:    keyID,
+		DpopBound:    bound,
+		DpopNeedCode: needCode,
+		Kicked:       kicked,
+		KickReason:   kickReason,
 	}
 }
 
@@ -488,7 +543,7 @@ func (c *Client) LoginSendMFA(ctx context.Context, mfaType string) error {
 func (c *Client) LoginMFA(ctx context.Context, code string) (map[string]any, error) {
 	code = strings.TrimSpace(code)
 	if code == "" && c.cfg.Code != "" {
-		generated, _, err := totp.Code(c.cfg.Code, time.Now())
+		generated, _, err := totp.Code(c.cfg.Code, clock.Now())
 		if err != nil {
 			return nil, fmt.Errorf("生成 TOTP: %w", err)
 		}
@@ -499,6 +554,34 @@ func (c *Client) LoginMFA(ctx context.Context, code string) (map[string]any, err
 
 // LoginPending 表示登录流程是否在等待二次验证码。
 func (c *Client) LoginPending() bool { return c.login.Pending() }
+
+// LoginDpopInfo 返回设备密钥与登记状态。
+func (c *Client) LoginDpopInfo(ctx context.Context) (map[string]any, error) {
+	return c.login.DpopInfo(ctx)
+}
+
+// LoginRegisterDpop 完成一次设备密钥登记。
+//
+// codeType 留空按 TOTP 优先；code 留空且需要人工验证码时返回 dpop_need_code。
+func (c *Client) LoginRegisterDpop(ctx context.Context, codeType, code string) (map[string]any, error) {
+	codeType = strings.TrimSpace(codeType)
+	code = strings.TrimSpace(code)
+	if code == "" && (codeType == "" || codeType == "otp") && c.cfg.Code != "" {
+		generated, _, err := totp.Code(c.cfg.Code, clock.Now())
+		if err != nil {
+			return nil, fmt.Errorf("生成 TOTP: %w", err)
+		}
+		code = generated
+	}
+	info, err := c.login.RegisterDeviceKey(ctx, codeType, code)
+	if err != nil {
+		return nil, err
+	}
+	if path := c.cfg.SessionPath(); path != "" {
+		_ = c.api.SaveCookies(path)
+	}
+	return info, nil
+}
 
 // LoginLogout 清除会话并断开隧道。
 func (c *Client) LoginLogout() error { return c.login.Logout() }
@@ -533,7 +616,7 @@ func (c *Client) TOTP() (TOTPCode, error) {
 	if c.cfg.Code == "" {
 		return TOTPCode{}, nil
 	}
-	code, remaining, err := totp.Code(c.cfg.Code, time.Now())
+	code, remaining, err := totp.Code(c.cfg.Code, clock.Now())
 	if err != nil {
 		return TOTPCode{}, err
 	}
@@ -561,12 +644,14 @@ func (c *Client) ClashProfile() string {
 	}
 	host, port := c.proxyHostPort()
 	return sub.Clash(sub.Options{
-		DirectDomains: directDomains,
-		NodeIPs:       nodeIPs,
-		Host:          host,
-		Port:          port,
-		Routes:        c.agent.Routes(),
-		Domains:       c.agent.Domains(),
+		DirectDomains:  directDomains,
+		NodeIPs:        nodeIPs,
+		Host:           host,
+		Port:           port,
+		Routes:         c.agent.Routes(),
+		Domains:        c.agent.Domains(),
+		DynamicDomains: c.agent.DynamicDomains(),
+		VPNDNS:         c.agent.VPNDNS(),
 	})
 }
 

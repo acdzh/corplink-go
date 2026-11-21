@@ -35,6 +35,9 @@ type Config struct {
 	PrivateKey string
 	// PeerKey 是节点公钥（标准 base64）。
 	PeerKey string
+	// PresharedKey 是可选 PSK（标准 base64）；服务端不下发时留空。
+	// 缺了它开 PSK 的租户会表现为"连上但零流量"。
+	PresharedKey string
 	// Endpoint 是节点 WireGuard 监听地址，形如 1.2.3.4:80。
 	Endpoint string
 	// Addresses 是本端隧道地址（不带掩码）。
@@ -189,10 +192,28 @@ func buildUAPI(cfg Config) (string, error) {
 	b.WriteString("private_key=" + priv + "\n")
 	b.WriteString("replace_peers=true\n")
 	b.WriteString("public_key=" + peer + "\n")
+	if cfg.PresharedKey != "" {
+		psk, err := keyToHex(cfg.PresharedKey)
+		if err != nil {
+			return "", fmt.Errorf("解析 PSK: %w", err)
+		}
+		b.WriteString("preshared_key=" + psk + "\n")
+	}
 	b.WriteString("replace_allowed_ips=true\n")
 	b.WriteString("endpoint=" + cfg.Endpoint + "\n")
 	b.WriteString("persistent_keepalive_interval=10\n")
 	for _, route := range cfg.AllowedIPs {
+		route = strings.TrimSpace(route)
+		if route == "" {
+			continue
+		}
+		// 这里只接受 IP / CIDR：域名规则走 DNS 与 Clash，混进来会让
+		// wireguard-go 的 UAPI 解析失败，而且报错完全看不出是域名。
+		if _, err := netip.ParsePrefix(route); err != nil {
+			if _, err := netip.ParseAddr(route); err != nil {
+				return "", fmt.Errorf("路由条目 %q 不是 IP 或 CIDR（域名规则请走 DNS/订阅）", route)
+			}
+		}
 		if strings.Contains(route, "/") {
 			b.WriteString("allowed_ip=" + route + "\n")
 			continue

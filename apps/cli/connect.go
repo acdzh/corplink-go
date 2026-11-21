@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/acdzh/corplink-go/corplink/api"
+	"github.com/acdzh/corplink-go/corplink/clock"
 	"github.com/acdzh/corplink-go/corplink/config"
+	"github.com/acdzh/corplink-go/corplink/totp"
 	"github.com/acdzh/corplink-go/corplink/wgkey"
 )
 
@@ -62,19 +64,21 @@ func runConnect(args []string) error {
 		return err
 	}
 	nodeClient.SetCookies(apiClient.Cookies())
-	activate := cfg.ActivateCode
-	if activate == "" {
-		activate = cfg.CompanyName
-	}
-	nodeClient.SetSigner(signerFor(activate, cfg.DeviceID))
+	dpopStore(cfg).Attach(nodeClient, signerFor(activateOf(cfg), cfg.DeviceID))
 
 	pair, err := wgkey.Generate()
 	if err != nil {
 		return err
 	}
+	otp := ""
+	if cfg.Code != "" {
+		if code, _, err := totp.Code(cfg.Code, clock.Now()); err == nil {
+			otp = code
+		}
+	}
 	env, err := nodeClient.Do(ctx, api.EndpointVPNConn, nil, map[string]string{
 		"public_key": pair.PublicKey,
-		"otp":        "",
+		"otp":        otp,
 	})
 	if err != nil {
 		return err
