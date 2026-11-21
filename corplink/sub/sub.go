@@ -50,6 +50,26 @@ type Options struct {
 	DNSTarget string
 }
 
+// normalizeDomain 把服务端下发的域名写法归一成 Clash 能用的裸后缀。
+//
+// 实测租户会同时下发 "byted.org"、"*.bytedance.net"、"*tiktokv.com"（星号后
+// 没有点）以及带前导空格的条目；不归一的话会生成 "+.*tiktokv.com"、
+// "DOMAIN-SUFFIX,*.google.com" 这种 Clash 不认的规则，那条域名等于没配。
+func normalizeDomain(raw string) string {
+	domain := strings.ToLower(strings.TrimSpace(raw))
+	for {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(domain, "*"), "."))
+		if trimmed == domain {
+			break
+		}
+		domain = trimmed
+	}
+	if domain == "" || strings.ContainsAny(domain, "* /:") {
+		return ""
+	}
+	return domain
+}
+
 // Clash 生成 Clash 配置。
 func Clash(opts Options) string {
 	host := opts.Host
@@ -83,9 +103,10 @@ func Clash(opts Options) string {
 		policy := map[string]any{}
 		for _, dnsIP := range dnsServers {
 			for _, domain := range append(append([]string{}, opts.Domains...), opts.DynamicDomains...) {
-				// 服务端同时下发 "x.com" 与 "*.x.com"，统一成裸域名再写 policy；
-				// 只剩通配写法时也不能丢，否则该租户的内网域名会退回公网 DNS。
-				domain = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(domain), "*."))
+				// 服务端同时下发 "x.com"、"*.x.com" 甚至 "*x.com"（星号后没点），
+				// 统一成裸域名再写 policy；通配写法也不能丢，否则该租户的内网域名
+				// 会退回公网 DNS，表现就是"内网站点找不到 DNS"。
+				domain = normalizeDomain(domain)
 				if domain == "" {
 					continue
 				}
@@ -101,7 +122,7 @@ func Clash(opts Options) string {
 
 	// 0. 防回环：控制面域名与节点 IP 直连。
 	for _, domain := range opts.DirectDomains {
-		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
+		domain = normalizeDomain(domain)
 		if domain == "" {
 			continue
 		}
@@ -139,7 +160,7 @@ func Clash(opts Options) string {
 		rules = append(rules, fmt.Sprintf("%s,%s,%s,no-resolve", kind, route, GroupName))
 	}
 	for _, domain := range append(append([]string{}, opts.Domains...), opts.DynamicDomains...) {
-		domain = strings.TrimSpace(strings.TrimPrefix(domain, "*."))
+		domain = normalizeDomain(domain)
 		if domain == "" || seen["domain:"+domain] {
 			continue
 		}

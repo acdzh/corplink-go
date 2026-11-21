@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -174,6 +176,14 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	if err := loadSession(apiClient, cfg); err != nil {
 		// 未登录不阻塞启动：端侧可以完成登录。
 		logger.Info("未加载会话", "reason", err)
+		// 上次若是被服务端终止，会话文件会被改名留档；这里提示一句，
+		// 免得又有人以为 session.json 凭空消失/被重写了。
+		if path := cfg.SessionPath(); path != "" {
+			if archives, _ := filepath.Glob(path + ".kicked-*"); len(archives) > 0 {
+				sort.Strings(archives)
+				logger.Warn("上次会话是被服务端终止的（已留档）", "archive", archives[len(archives)-1])
+			}
+		}
 	}
 
 	provider := opts.TUN

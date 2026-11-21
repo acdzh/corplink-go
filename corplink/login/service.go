@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -502,9 +504,18 @@ func (s *Service) finish(ctx context.Context) (map[string]any, error) {
 }
 
 // saveCookies 落盘会话；失败只记事件，不影响登录结果。
+//
+// 被踢之后禁止再写：此时 cookie jar 已经被清空，写回去会留下一个
+// "文件存在但没有会话"的残废状态，重启后看不出到底发生过什么。
 func (s *Service) saveCookies(stage string) {
 	path := s.cfg.SessionPath()
 	if path == "" {
+		return
+	}
+	s.mu.Lock()
+	kicked := s.kicked
+	s.mu.Unlock()
+	if kicked {
 		return
 	}
 	if err := s.client.SaveCookies(path); err != nil {
@@ -734,17 +745,44 @@ func (s *Service) setDeviceState(keyID string, bound, needCode bool, codeType st
 // 与主动登出不同：这里不请求 /api/logout（会话已经没了），直接清 cookie 与
 // session 文件，并在状态里留下原因，供面板提示"请重新登录"。
 func (s *Service) MarkKicked(reason string) {
-	s.agent.Disconnect()
-	s.client.ClearCookies()
-	if path := s.cfg.SessionPath(); path != "" {
-		_ = os.Remove(path)
-	}
+	// 先把状态置为"被踢"，后面的 saveCookies 才不会把空 cookie 写回去。
 	s.mu.Lock()
 	s.current = nil
 	s.kicked = true
 	s.kickReason = reason
 	s.mu.Unlock()
+
+	s.agent.Disconnect()
+	s.client.ClearCookies()
+	if path := s.cfg.SessionPath(); path != "" {
+		archiveSessionFile(path)
+	}
 	s.agent.LogEvent("warn", "会话已失效，请重新登录（%s）", reason)
+}
+
+// archiveSessionFile 把失效的会话文件改名留档，而不是直接删掉。
+//
+// 直接删会让人误以为"session.json 被吞了/被重写了"，也丢掉唯一的现场
+// （里面能看出是哪台设备、哪次登录的会话）。只保留最近 3 份，避免堆垃圾。
+func archiveSessionFile(path string) {
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	stamp := time.Now().Format("20060102-150405")
+	_ = os.Rename(path, path+".kicked-"+stamp)
+	pruneSessionArchives(path, 3)
+}
+
+// pruneSessionArchives 只保留最近 keep 份失效会话存档。
+func pruneSessionArchives(path string, keep int) {
+	matches, err := filepath.Glob(path + ".kicked-*")
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches)
+	for _, old := range matches[:len(matches)-keep] {
+		_ = os.Remove(old)
+	}
 }
 
 // Kicked 返回是否处于"被服务端终止"状态。
