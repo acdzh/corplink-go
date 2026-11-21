@@ -28,9 +28,6 @@ type Settings struct {
 	AutoModeIntervalSeconds *int `json:"auto_mode_interval_seconds"`
 	// KeepaliveSeconds 是会话保活间隔（秒）。
 	KeepaliveSeconds *int `json:"keepalive_seconds"`
-	// SocksUser 与 SocksPass 是代理认证。
-	SocksUser *string `json:"socks5_username"`
-	SocksPass *string `json:"socks5_password"`
 	// LogLevel 是日志级别。
 	LogLevel *string `json:"log_level"`
 	// DeviceModel 与 DeviceBrand 影响 UA 与 query 上报。
@@ -59,8 +56,6 @@ func (c *Client) Settings() Settings {
 		PanelListen:             &panelListen,
 		AutoModeIntervalSeconds: &c.cfg.AutoModeIntervalSeconds,
 		KeepaliveSeconds:        &c.cfg.KeepaliveSeconds,
-		SocksUser:               &c.cfg.SocksUser,
-		SocksPass:               &c.cfg.SocksPass,
 		LogLevel:                &c.cfg.LogLevel,
 		DeviceModel:             &c.cfg.DeviceModel,
 		DeviceBrand:             &c.cfg.DeviceBrand,
@@ -145,11 +140,6 @@ func (c *Client) UpdateSettings(ctx context.Context, in Settings) ([]string, err
 		}
 		cfg.KeepaliveSeconds = *in.KeepaliveSeconds
 		restart = append(restart, "keepalive_seconds")
-	}
-	if in.SocksUser != nil && in.SocksPass != nil && (*in.SocksUser != cfg.SocksUser || *in.SocksPass != cfg.SocksPass) {
-		cfg.SocksUser = *in.SocksUser
-		cfg.SocksPass = *in.SocksPass
-		restart = append(restart, "socks5_auth")
 	}
 	if in.LogLevel != nil {
 		v := strings.TrimSpace(*in.LogLevel)

@@ -221,7 +221,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.proxyLn = proxyLn
 	c.proxyAddr = proxyLn.Addr().String()
 	go func() {
-		if err := proxy.New(c.agent, c.cfg).Serve(proxyLn); err != nil && runCtx.Err() == nil {
+		if err := proxy.New(c.agent).Serve(proxyLn); err != nil && runCtx.Err() == nil {
 			c.log.Warn("代理服务退出", "err", err)
 		}
 	}()
@@ -248,9 +248,6 @@ func (c *Client) ProxyAddr() string { return c.proxyAddr }
 
 // ServerURL 返回当前企业服务端地址。
 func (c *Client) ServerURL() string { return c.cfg.Server }
-
-// SocksAuth 返回混合代理的认证账号与密码。
-func (c *Client) SocksAuth() (string, string) { return c.cfg.SocksUser, c.cfg.SocksPass }
 
 // ConfigPath 返回配置文件的落盘路径。
 func (c *Client) ConfigPath() string { return c.cfg.Path() }
@@ -530,8 +527,6 @@ func (c *Client) ClashProfile() string {
 		NodeIPs:       nodeIPs,
 		Host:          host,
 		Port:          port,
-		Username:      c.cfg.SocksUser,
-		Password:      c.cfg.SocksPass,
 		Routes:        c.agent.Routes(),
 		Domains:       c.agent.Domains(),
 	})

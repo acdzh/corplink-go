@@ -84,10 +84,6 @@ type Config struct {
 	PreferNode string `json:"prefer_node,omitempty"`
 	// SocksListen 是用户态代理监听地址。
 	SocksListen string `json:"socks5_listen,omitempty"`
-	// SocksUser 与 SocksPass 非空时给 SOCKS5 启用 RFC1929 认证。
-	SocksUser string `json:"socks5_username,omitempty"`
-	SocksPass string `json:"socks5_password,omitempty"`
-
 	// LogLevel 控制日志详细程度。
 	LogLevel string `json:"log_level,omitempty"`
 }

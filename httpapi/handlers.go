@@ -271,12 +271,9 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 		writeJSON(w, map[string]any{"has_secret": true, "code": code.Code, "remaining": code.Remaining})
 	})
 	mux.HandleFunc("/api/sub", func(w http.ResponseWriter, _ *http.Request) {
-		// 配了令牌才带 token：Clash 那侧没有 Cookie，不带会被拒。
-		url := fmt.Sprintf("http://%s/clash.yml", s.PanelAddr)
-		if s.Token != "" {
-			url += "?token=" + s.Token
-		}
-		writeJSON(w, map[string]string{"url": url})
+		writeJSON(w, map[string]string{
+			"url": fmt.Sprintf("http://%s/clash.yml", s.PanelAddr),
+		})
 	})
 }
 

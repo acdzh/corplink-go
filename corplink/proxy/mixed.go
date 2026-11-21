@@ -7,8 +7,6 @@ package proxy
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
-	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -16,11 +14,9 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/acdzh/corplink-go/corplink/agent"
-	"github.com/acdzh/corplink-go/corplink/config"
 )
 
 // 连接与握手参数。
@@ -34,16 +30,11 @@ const (
 // Server 是混合代理服务。
 type Server struct {
 	agent *agent.Agent
-	cfg   *config.Config
 }
 
 // New 构造混合代理。
-func New(a *agent.Agent, cfg ...*config.Config) *Server {
-	var c *config.Config
-	if len(cfg) > 0 {
-		c = cfg[0]
-	}
-	return &Server{agent: a, cfg: c}
+func New(a *agent.Agent) *Server {
+	return &Server{agent: a}
 }
 
 // Serve 在监听器上接受连接，按协议分发。
@@ -86,21 +77,9 @@ func (s *Server) handleSocks5(conn net.Conn, br *bufio.Reader) {
 	if _, err := io.ReadFull(br, methods); err != nil {
 		return
 	}
-	if expectedUser, expectedPass, needAuth := s.authRequired(); needAuth {
-		if !containsMethod(methods, 0x02) {
-			_, _ = conn.Write([]byte{0x05, 0xFF})
-			return
-		}
-		if _, err := conn.Write([]byte{0x05, 0x02}); err != nil {
-			return
-		}
-		if !s.authenticateSocks5(conn, br, expectedUser, expectedPass) {
-			return
-		}
-	} else {
-		if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
-			return
-		}
+	// 不做认证：直接在问候阶段选「无认证」。
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return
 	}
 
 	req := make([]byte, 4)
@@ -164,13 +143,6 @@ func (s *Server) handleHTTP(conn net.Conn, br *bufio.Reader) {
 	req, err := http.ReadRequest(br)
 	if err != nil {
 		return
-	}
-	if expectedUser, expectedPass, needAuth := s.authRequired(); needAuth {
-		if !authenticateHTTP(req, expectedUser, expectedPass) {
-			_, _ = io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Corplink Go\"\r\nConnection: close\r\n\r\n")
-			return
-		}
-		req.Header.Del("Proxy-Authorization")
 	}
 	host, port := targetOf(req)
 	if host == "" {
@@ -299,80 +271,3 @@ func bridge(client net.Conn, clientReader io.Reader, upstream net.Conn) {
 	}()
 	<-done
 }
-
-// authRequired 返回当前是否启用代理认证及配置的凭据。
-func (s *Server) authRequired() (string, string, bool) {
-	if s.cfg == nil || s.cfg.SocksUser == "" {
-		return "", "", false
-	}
-	return s.cfg.SocksUser, s.cfg.SocksPass, true
-}
-
-// containsMethod 判断客户端支持的认证方法列表是否包含指定方法。
-func containsMethod(methods []byte, target byte) bool {
-	for _, m := range methods {
-		if m == target {
-			return true
-		}
-	}
-	return false
-}
-
-// authenticateSocks5 按 RFC 1929 执行 SOCKS5 用户名/密码子协商认证。
-func (s *Server) authenticateSocks5(conn net.Conn, br *bufio.Reader, expectedUser, expectedPass string) bool {
-	verLen := make([]byte, 2)
-	if _, err := io.ReadFull(br, verLen); err != nil {
-		return false
-	}
-	if verLen[0] != 0x01 {
-		_, _ = conn.Write([]byte{0x01, 0x01})
-		return false
-	}
-	uname := make([]byte, int(verLen[1]))
-	if _, err := io.ReadFull(br, uname); err != nil {
-		return false
-	}
-	plen := make([]byte, 1)
-	if _, err := io.ReadFull(br, plen); err != nil {
-		return false
-	}
-	passwd := make([]byte, int(plen[0]))
-	if _, err := io.ReadFull(br, passwd); err != nil {
-		return false
-	}
-	if !checkCredentials(string(uname), string(passwd), expectedUser, expectedPass) {
-		_, _ = conn.Write([]byte{0x01, 0x01})
-		return false
-	}
-	if _, err := conn.Write([]byte{0x01, 0x00}); err != nil {
-		return false
-	}
-	return true
-}
-
-// authenticateHTTP 解析并校验 HTTP Proxy-Authorization Basic 凭据。
-func authenticateHTTP(req *http.Request, expectedUser, expectedPass string) bool {
-	hdr := strings.TrimSpace(req.Header.Get("Proxy-Authorization"))
-	if len(hdr) < 6 || !strings.EqualFold(hdr[:6], "Basic ") {
-		return false
-	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(hdr[6:]))
-	if err != nil {
-		return false
-	}
-	user, pass, ok := strings.Cut(string(raw), ":")
-	if !ok {
-		return false
-	}
-	return checkCredentials(user, pass, expectedUser, expectedPass)
-}
-
-// checkCredentials 使用常量时间比较校验代理用户名与密码。
-func checkCredentials(user, pass, expectedUser, expectedPass string) bool {
-	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) == 1
-	return userOK && passOK
-}
-
-// ensure strings import is used when rewriting headers.
-var _ = strings.TrimSpace

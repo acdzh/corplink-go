@@ -7,7 +7,7 @@
 
 ```
 apps/*     端侧（CLI / 桌面 / Android）—— 只调库，不复制业务逻辑
-httpapi    HTTP 契约（JSON API + 控制面板页面 + 令牌鉴权）—— 只依赖库
+httpapi    HTTP 契约（JSON API + 控制面板页面）—— 只依赖库
 corplink/  库：登录、签名、隧道、代理、订阅、TOTP —— 只依赖标准库与 wireguard-go
 ```
 
@@ -15,7 +15,7 @@ corplink/  库：登录、签名、隧道、代理、订阅、TOTP —— 只依
 
 - **登录与保活**：PKCE 第三方授权（SSO / 飞书）+ 二次验证（邮箱 / 短信 / 自动 TOTP），会话自动保存与保活
 - **协议与隧道**：按服务端规则对请求签名（HKDF + HMAC + protobuf 头），拉取节点并建立 WireGuard 隧道（支持 UDP 与 TCP 分帧）
-- **混合代理与认证**：本机单端口同时提供 SOCKS5 与 HTTP 代理，支持 RFC 1929 与 Basic 认证
+- **混合代理**：本机单端口同时提供 SOCKS5 与 HTTP 代理，不设用户名密码
 - **Web 控制面板**：连接/断开/自动选路/单节点与全量测速/节点搜索与标签筛选/分流规则校验/TOTP 倒计时与复制/实时流量速率与峰值/登录向导/运行日志/动态配置
 - **Clash 订阅**：生成防回环的 Clash 配置，分流规则由服务端下发并交给 Clash 执行
 - **桌面客户端**：MyGo 原生窗口（节点、流量、令牌、设置、日志）+ 菜单栏动态状态图标、节点直连切换与一键复制动态码
@@ -50,9 +50,8 @@ EOF
 ./corplink serve -config ./data/config.json
 ```
 
-面板默认不校验，直接打开 `http://127.0.0.1:13140/` 即可。
-想加一层校验就起的时候带 `-panel-token <令牌>`，之后访问要带 `?token=` 或请求头
-`X-Corplink-Token`（首次带 token 会写入 Cookie，之后直接开根路径也能用）。
+面板不做任何鉴权，直接打开 `http://127.0.0.1:13140/` 即可。谁能连到这个端口，谁就能用面板，
+所以不想给局域网用就别把 `-panel` 绑到 `0.0.0.0`。
 
 打开面板：
 
@@ -76,7 +75,6 @@ curl -x http://127.0.0.1:3710 http://internal.example.com
 http://127.0.0.1:13140/clash.yml
 ```
 
-（如果起服务时配了 `-panel-token`，链接要补 `?token=<令牌>`。）
 
 导入 Clash Verge 后保持「规则」模式即可。配置里包含控制面域名与节点公网 IP 的防回环直连规则，
 企业内网分流规则来自服务端 `/vpn/conn` 下发的网段与域名后缀，未命中走 `MATCH,DIRECT`。
@@ -136,7 +134,7 @@ CMD      serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:1314
 也就是容器内跑的就是 CLI 的 `serve`：混合代理在 3710，面板在 13140，状态落在 `/data`
 （`config.json` + `session.json`）。面板监听 `0.0.0.0` 且默认不校验令牌，
 同网段能连到 13140 的人都能直接打开面板 —— 只想本机用就把 `-panel` 改成 `127.0.0.1:13140`，
-或者加 `-panel-token` 让请求必须带令牌：
+只想本机用就别绑 `0.0.0.0`：
 
 ```bash
 docker run -d --name corp-link \
@@ -218,7 +216,7 @@ corplink/corplink.go     库门面：New / Start / Close / Status / Nodes / Conn
 corplink/settings.go     配置读写（Settings / UpdateSettings）
 corplink/agent           单隧道管理、测速、自动选路、看门狗、事件日志
 corplink/tunnel          wireguard-go 封装；Start 用 netstack，StartWith 用外部网卡
-corplink/proxy           SOCKS5 + HTTP 混合代理（含认证）
+corplink/proxy           SOCKS5 + HTTP 混合代理
 corplink/api             飞连 HTTP 协议与签名钩子
 corplink/auth            PKCE / 2FA / OTP
 corplink/login           登录流程编排
@@ -227,7 +225,7 @@ corplink/sub             Clash 订阅生成
 corplink/totp            TOTP 动态码
 corplink/wgkey           X25519 密钥
 corplink/config          配置与设备标识
-httpapi                  JSON API + 控制面板页面 + 令牌鉴权
+httpapi                  JSON API + 控制面板页面
 apps/cli                 CLI 与服务入口
 apps/desktop             MyGo 原生桌面端
 apps/android             Android 端（gomobile 门面 + VpnService + Compose）

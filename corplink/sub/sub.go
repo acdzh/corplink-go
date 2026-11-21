@@ -28,9 +28,6 @@ type Options struct {
 	Host string
 	// Port 是本地代理端口。
 	Port int
-	// Username 与 Password 非空时写入认证。
-	Username string
-	Password string
 	// Routes 是服务端下发的分流网段。
 	Routes []string
 	// Domains 是服务端下发的分流域名后缀。
@@ -56,10 +53,6 @@ func Clash(opts Options) string {
 		"server": host,
 		"port":   opts.Port,
 		"udp":    true,
-	}
-	if opts.Username != "" {
-		proxy["username"] = opts.Username
-		proxy["password"] = opts.Password
 	}
 
 	dns := map[string]any{

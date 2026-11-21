@@ -73,7 +73,7 @@ func usage() {
   corplink-go login   [-config <path>] [-alias lark] [-callback <URL>] [-v]
   corplink-go list    [-config <path>] [-v]
   corplink-go connect [-config <path>] [-name <node>] [-v]
-  corplink-go serve   [-config <path>] [-proxy 127.0.0.1:3710] [-panel 127.0.0.1:13140] [-panel-token <token>] [-name <node>] [-keepalive 30m] [-v]
+  corplink-go serve   [-config <path>] [-proxy 127.0.0.1:3710] [-panel 127.0.0.1:13140] [-name <node>] [-keepalive 30m] [-v]
   corplink-go version
 `)
 }

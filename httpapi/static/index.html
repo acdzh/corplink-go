@@ -880,8 +880,6 @@
       <label class="field">服务端地址 (server，留空自动解析)<input id="setServer" placeholder="https://sealsuite.example.com"></label>
       <label class="field">代理监听地址 (SOCKS5 + HTTP)<input id="setProxy" placeholder="127.0.0.1:3710"></label>
       <label class="field">控制面板监听地址<input id="setPanel" placeholder="127.0.0.1:13140"></label>
-      <label class="field">代理认证用户名（留空不认证）<input id="setUser" placeholder="可选"></label>
-      <label class="field">代理认证密码<input id="setPass" type="password" placeholder="可选"></label>
       <label class="field">自动选路测速间隔（秒）<input id="setAutoInterval" type="number" min="0"></label>
       <label class="field">会话保活间隔（秒）<input id="setKeepalive" type="number" min="0"></label>
     </div>
@@ -1655,8 +1653,6 @@ async function loadSettings() {
     $('setActivate').value = s.activate_code || '';
     $('setProxy').value = s.proxy_listen || '';
     $('setPanel').value = s.panel_listen || '';
-    $('setUser').value = s.socks5_username || '';
-    $('setPass').value = s.socks5_password || '';
     $('setAutoInterval').value = s.auto_mode_interval_seconds !== undefined ? s.auto_mode_interval_seconds : 300;
     $('setKeepalive').value = s.keepalive_seconds !== undefined ? s.keepalive_seconds : 1800;
     $('setLog').value = s.log_level || 'info';
@@ -1681,8 +1677,6 @@ async function saveSettings() {
         activate_code: $('setActivate').value.trim(),
         proxy_listen: $('setProxy').value.trim(),
         panel_listen: $('setPanel').value.trim(),
-        socks5_username: $('setUser').value.trim(),
-        socks5_password: $('setPass').value,
         auto_mode_interval_seconds: parseInt($('setAutoInterval').value || '300', 10),
         keepalive_seconds: parseInt($('setKeepalive').value || '1800', 10),
         log_level: $('setLog').value,
