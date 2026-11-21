@@ -156,8 +156,8 @@ func buildQuery(name string) ([]byte, error) {
 	return builder.Finish()
 }
 
-// TestSplitRouting 覆盖"内网域名走隧道 DNS、公网域名走系统 DNS"。
-func TestSplitRouting(t *testing.T) {
+// TestAllQueriesGoToTunnel 覆盖默认形态：连上隧道后所有查询都发给公司 DNS。
+func TestAllQueriesGoToTunnel(t *testing.T) {
 	tunnelAddr, stopTunnel := fakeUpstream(t, "10.88.128.53")
 	defer stopTunnel()
 	systemAddr, stopSystem := fakeUpstream(t, "1.2.3.4")
@@ -167,19 +167,69 @@ func TestSplitRouting(t *testing.T) {
 		Listen:         "127.0.0.1:0",
 		Upstream:       []string{tunnelAddr},
 		SystemUpstream: []string{systemAddr},
-		SplitDomains:   []string{"bytedance.net", "*.bytedance.net"},
 	})
 	if err := server.Start(); err != nil {
 		t.Fatalf("启动: %v", err)
 	}
 	defer server.Close()
 	addr := server.Addr()
+	for _, name := range []string{"www.bytedance.net", "example.com"} {
+		if got, err := queryA(t, addr, name); err != nil || got != "10.88.128.53" {
+			t.Fatalf("%s 应走公司 DNS，得到 %q / %v", name, got, err)
+		}
+	}
+}
 
+// TestExcludeGoesPhysical 覆盖排除表：命中排除表的域名走物理网络 DNS。
+func TestExcludeGoesPhysical(t *testing.T) {
+	tunnelAddr, stopTunnel := fakeUpstream(t, "10.88.128.53")
+	defer stopTunnel()
+	systemAddr, stopSystem := fakeUpstream(t, "1.2.3.4")
+	defer stopSystem()
+
+	server := New(Options{
+		Listen:         "127.0.0.1:0",
+		Upstream:       []string{tunnelAddr},
+		SystemUpstream: []string{systemAddr},
+		ExcludeFunc:    func() []string { return []string{"bytedance.com", "*.corp.example"} },
+	})
+	if err := server.Start(); err != nil {
+		t.Fatalf("启动: %v", err)
+	}
+	defer server.Close()
+	addr := server.Addr()
 	if got, err := queryA(t, addr, "www.bytedance.net"); err != nil || got != "10.88.128.53" {
-		t.Fatalf("内网域名应走隧道 DNS，得到 %q / %v", got, err)
+		t.Fatalf("未命中排除表应走公司 DNS，得到 %q / %v", got, err)
+	}
+	if got, err := queryA(t, addr, "hr.bytedance.com"); err != nil || got != "1.2.3.4" {
+		t.Fatalf("命中排除表应走物理 DNS，得到 %q / %v", got, err)
+	}
+}
+
+// TestSplitModeFollowsDomains 覆盖可选的分流模式。
+func TestSplitModeFollowsDomains(t *testing.T) {
+	tunnelAddr, stopTunnel := fakeUpstream(t, "10.88.128.53")
+	defer stopTunnel()
+	systemAddr, stopSystem := fakeUpstream(t, "1.2.3.4")
+	defer stopSystem()
+
+	server := New(Options{
+		Listen:         "127.0.0.1:0",
+		Upstream:       []string{tunnelAddr},
+		SystemUpstream: []string{systemAddr},
+		SplitDomains:   []string{"bytedance.net"},
+		SplitMode:      true,
+	})
+	if err := server.Start(); err != nil {
+		t.Fatalf("启动: %v", err)
+	}
+	defer server.Close()
+	addr := server.Addr()
+	if got, err := queryA(t, addr, "www.bytedance.net"); err != nil || got != "10.88.128.53" {
+		t.Fatalf("分流模式下内网域名应走公司 DNS，得到 %q / %v", got, err)
 	}
 	if got, err := queryA(t, addr, "example.com"); err != nil || got != "1.2.3.4" {
-		t.Fatalf("公网域名应走系统 DNS，得到 %q / %v", got, err)
+		t.Fatalf("分流模式下公网域名应走物理 DNS，得到 %q / %v", got, err)
 	}
 }
 

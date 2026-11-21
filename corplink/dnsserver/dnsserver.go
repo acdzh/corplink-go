@@ -52,6 +52,13 @@ type Options struct {
 	UpstreamFunc func() []string
 	// SplitFunc 动态返回内网域名后缀；为空时用 SplitDomains。
 	SplitFunc func() []string
+	// PhysicalFunc 动态返回当前物理网络的 DNS；为空时自动发现并缓存。
+	PhysicalFunc func() []string
+	// ExcludeFunc 动态返回"强制走物理网络 DNS"的域名（服务端排除表）。
+	ExcludeFunc func() []string
+	// SplitMode 为真时才按域名分流；默认 false —— 连上隧道后所有查询都发给
+	// 公司 DNS（与官方一致：VpnService.addDnsServer 只下发 vpn_dns/vpn_dns_backup）。
+	SplitMode bool
 	// SystemUpstream 是非内网域名的上游，为空时读 /etc/resolv.conf。
 	SystemUpstream []string
 	// SplitDomains 是走内网 DNS 的域名后缀（含通配写法）。
@@ -223,6 +230,9 @@ func (s *Server) resolve(ctx context.Context, query []byte, tcp bool) ([]byte, e
 	upstreams := s.upstreamsFor(question.Name.String())
 	var lastErr error
 	for _, upstream := range upstreams {
+		if s.sameAsListen(upstream) {
+			continue
+		}
 		resp, err := s.forward(ctx, upstream, query, tcp)
 		if err != nil {
 			lastErr = err
@@ -238,28 +248,75 @@ func (s *Server) resolve(ctx context.Context, query []byte, tcp bool) ([]byte, e
 }
 
 // upstreamsFor 按域名选择上游：命中内网后缀走隧道 DNS，其余走系统 DNS。
+// sameAsListen 判断上游是否就是我们自己，避免把查询打回自身形成环。
+func (s *Server) sameAsListen(upstream string) bool {
+	addr := withDefaultPort(upstream)
+	if s.udp == nil {
+		return false
+	}
+	return addr == s.udp.LocalAddr().String() || addr == s.opts.Listen
+}
+
 func (s *Server) upstreamsFor(name string) []string {
 	lower := strings.ToLower(strings.TrimSuffix(name, "."))
-	internal := false
-	for _, suffix := range s.splitDomains() {
+	// 排除表优先：官方把 vpn_global_exclude / exclude_dynamic_domain /
+	// exclude_static_domain 里的域名交给物理网络 DNS 解析，避免内网 DNS 回错误答案。
+	if s.matchAny(lower, s.excludeDomains()) {
+		return s.physicalUpstreams()
+	}
+	tunnel := s.tunnelUpstreams()
+	if !s.opts.SplitMode {
+		// 官方默认形态：连上隧道后所有查询都走 vpn_dns（主备），
+		// 断开时自然回落物理网络 DNS。
+		if len(tunnel) > 0 {
+			return tunnel
+		}
+		return s.physicalUpstreams()
+	}
+	if s.matchAny(lower, s.splitDomains()) && len(tunnel) > 0 {
+		return tunnel
+	}
+	return s.physicalUpstreams()
+}
+
+// matchAny 判断域名是否命中后缀表（支持 *.x 写法）。
+func (s *Server) matchAny(name string, suffixes []string) bool {
+	for _, suffix := range suffixes {
 		suffix = strings.ToLower(strings.TrimSpace(suffix))
 		suffix = strings.TrimPrefix(suffix, "*.")
 		if suffix == "" {
 			continue
 		}
-		if lower == suffix || strings.HasSuffix(lower, "."+suffix) {
-			internal = true
-			break
+		if name == suffix || strings.HasSuffix(name, "."+suffix) {
+			return true
 		}
 	}
-	if internal {
-		if ups := s.tunnelUpstreams(); len(ups) > 0 {
+	return false
+}
+
+// excludeDomains 返回需要走物理网络 DNS 的域名。
+func (s *Server) excludeDomains() []string {
+	if s.opts.ExcludeFunc != nil {
+		return s.opts.ExcludeFunc()
+	}
+	return nil
+}
+
+// physicalUpstreams 返回物理网络 DNS；优先动态发现，其次静态配置。
+func (s *Server) physicalUpstreams() []string {
+	if s.opts.PhysicalFunc != nil {
+		if ups := s.opts.PhysicalFunc(); len(ups) > 0 {
 			return ups
 		}
 	}
-	// 没命中内网后缀时，也把隧道 DNS 作为兜底：服务端 DNS 对公网域名同样能解析，
-	// 而系统 DNS 在隧道场景下可能因为路由改动而不可达。
-	return append(append([]string{}, s.opts.SystemUpstream...), s.tunnelUpstreams()...)
+	return s.opts.SystemUpstream
+}
+
+// Reset 清空缓存；连接状态或网络变化后调用。
+func (s *Server) Reset() {
+	s.mu.Lock()
+	s.cache = make(map[string]cacheEntry)
+	s.mu.Unlock()
 }
 
 // forward 把原始查询转发给上游，返回原始响应。

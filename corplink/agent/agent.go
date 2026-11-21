@@ -172,6 +172,8 @@ type Options struct {
 	SolveVPNMFA func(ctx context.Context) error
 	// OnKicked 在会话被服务端终止（101 / logout_reason / report 1000）时回调。
 	OnKicked func(reason string)
+	// OnTunnelChange 在隧道建立/断开时回调（本地 DNS 用它清缓存）。
+	OnTunnelChange func()
 	// Verbose 打开节点侧请求日志（/vpn/conn、/vpn/report）。
 	Verbose bool
 }
@@ -188,6 +190,7 @@ type Agent struct {
 	recover      func(ctx context.Context, code int, mode RecoveryMode) error
 	solveVPNMFA  func(ctx context.Context) error
 	onKickedFn   func(reason string)
+	onTunnelFn   func()
 	verbose      bool
 
 	mu sync.RWMutex
@@ -227,6 +230,8 @@ type active struct {
 	domains []string
 	// dynamicDomains 是当前隧道的动态域名清单。
 	dynamicDomains []string
+	// excludeDomains 是不走公司 DNS 的域名清单。
+	excludeDomains []string
 	mtu            int
 	protocol       string
 	since          time.Time
@@ -249,6 +254,7 @@ func New(_ context.Context, cfg *config.Config, client *api.Client, opts Options
 		recover:        opts.Recover,
 		solveVPNMFA:    opts.SolveVPNMFA,
 		onKickedFn:     opts.OnKicked,
+		onTunnelFn:     opts.OnTunnelChange,
 		verbose:        opts.Verbose,
 		latencies:      map[string]int64{},
 		protoOverride:  map[string]int{},
@@ -410,6 +416,19 @@ func (a *Agent) DialContext(ctx context.Context, network, addr string) (net.Conn
 		}
 	}
 	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
+
+// ExcludeDomains 返回服务端下发的"不走公司 DNS"的域名清单。
+//
+// 三个来源合并：vpn_global_exclude.domains、exclude_static_domain、
+// 以及 exclude_dynamic_domain 的键。
+func (a *Agent) ExcludeDomains() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.current == nil {
+		return nil
+	}
+	return a.current.excludeDomains
 }
 
 // DynamicDomains 返回当前隧道的动态域名清单（服务端 dynamic_domain）。
@@ -601,6 +620,9 @@ func (a *Agent) Disconnect() {
 	a.current = nil
 	a.mu.Unlock()
 	a.stopReport(true)
+	if a.onTunnelFn != nil {
+		a.onTunnelFn()
+	}
 	if old != nil {
 		old.tun.Close()
 		a.addEvent("info", "已断开节点 %s", nodeName(old.node))
@@ -1040,6 +1062,8 @@ type Plan struct {
 	domains []string
 	// dynamicDomains 是服务端下发的动态域名（需要走隧道/内网解析）。
 	dynamicDomains []string
+	// excludeDomains 是不走公司 DNS 的域名。
+	excludeDomains []string
 	// mtu 是隧道 MTU。
 	mtu int
 	// protocol 是传输协议展示名。
@@ -1229,6 +1253,11 @@ func splitPrefix(prefix netip.Prefix) (netip.Prefix, netip.Prefix) {
 // SetSolveVPNMFA 注册连接期二次认证的求解函数。
 func (a *Agent) SetSolveVPNMFA(fn func(ctx context.Context) error) {
 	a.solveVPNMFA = fn
+}
+
+// SetOnTunnelChange 注册隧道建立/断开的回调。
+func (a *Agent) SetOnTunnelChange(fn func()) {
+	a.onTunnelFn = fn
 }
 
 // SetOnKicked 注册"会话被终止"的回调。
@@ -1558,6 +1587,7 @@ func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo, mode RouteMod
 		dns:            dns,
 		domains:        info.Setting.VpnDNSDomain,
 		dynamicDomains: info.Setting.DynamicDomain,
+		excludeDomains: excludeDomainsOf(info.Setting),
 		mtu:            mtu,
 		protocol:       protocolName,
 		target:         nodeName(node),
@@ -1591,6 +1621,7 @@ func (a *Agent) establish(_ context.Context, plan *Plan, dev tun.Device) error {
 		dns:            plan.dns,
 		domains:        plan.domains,
 		dynamicDomains: plan.dynamicDomains,
+		excludeDomains: plan.excludeDomains,
 		mtu:            plan.mtu,
 		protocol:       plan.protocol,
 		since:          time.Now(),
@@ -1607,6 +1638,9 @@ func (a *Agent) establish(_ context.Context, plan *Plan, dev tun.Device) error {
 	a.addEvent("info", "已连接 %s（隧道 %s，%s，路由 %d 条）", plan.target, next.addr, next.protocol, len(next.tun.Routes()))
 	// 连上后开始周期上报：服务端靠它记录在线状态，也用 code=1000 通知被踢。
 	a.startReport(plan)
+	if a.onTunnelFn != nil {
+		a.onTunnelFn()
+	}
 	return nil
 }
 
@@ -1670,4 +1704,15 @@ func (a *Agent) Watchdog(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}
+}
+
+// excludeDomainsOf 合并服务端下发的三张排除表。
+func excludeDomainsOf(setting api.WgSetting) []string {
+	out := make([]string, 0, len(setting.ExcludeStaticDomain)+len(setting.VpnGlobalExclude.Domains)+len(setting.ExcludeDynamicDomain))
+	out = append(out, setting.ExcludeStaticDomain...)
+	out = append(out, setting.VpnGlobalExclude.Domains...)
+	for domain := range setting.ExcludeDynamicDomain {
+		out = append(out, domain)
+	}
+	return out
 }

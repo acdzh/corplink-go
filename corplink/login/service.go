@@ -509,7 +509,9 @@ func (s *Service) RegisterDeviceKey(ctx context.Context, codeType, code string) 
 	}
 	status, err := s.auth.DpopStatus(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询设备密钥状态: %w", err)
+		// 未登记设备查不了这个接口（服务端回 40001），按未绑定继续走注册流程。
+		s.agent.LogEvent("warn", "查询设备密钥状态失败，按未登记继续: %v", err)
+		status = &api.DpopStatus{}
 	}
 	s.setDeviceState(key.ID(), status.Bound(key.ID()), false, "")
 	if status.Bound(key.ID()) {

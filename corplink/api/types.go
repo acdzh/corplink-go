@@ -306,6 +306,12 @@ type WgSetting struct {
 	SearchDomain []string `json:"search_domain"`
 	// ExcludeRoute 是不进隧道的网段。
 	ExcludeRoute []string `json:"exclude_route"`
+	// ExcludeStaticDomain 是静态排除域名：这些域名不走公司 DNS。
+	ExcludeStaticDomain []string `json:"exclude_static_domain"`
+	// ExcludeDynamicDomain 是动态排除域名（对象形态，键即域名）。
+	ExcludeDynamicDomain map[string]any `json:"exclude_dynamic_domain"`
+	// VpnGlobalExclude 是全局排除项。
+	VpnGlobalExclude VpnGlobalExclude `json:"vpn_global_exclude"`
 }
 
 // CentralDNS 是内网 DNS 配置。
@@ -314,6 +320,14 @@ type CentralDNS struct {
 	DNS []string `json:"dns"`
 	// Vip 是内网 DNS 的 dnat 网段，官方缺省按 30.100.0.0/14 处理。
 	Vip string `json:"vip"`
+}
+
+// VpnGlobalExclude 是全局排除的域名与网段。
+type VpnGlobalExclude struct {
+	// Domains 是不走公司 DNS 的域名。
+	Domains []string `json:"domains"`
+	// IPs 是不走隧道的地址。
+	IPs []string `json:"ips"`
 }
 
 // IPNat 是一条 NAT 映射。

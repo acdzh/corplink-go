@@ -365,13 +365,22 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		c.mu.RLock()
 		prover := c.prover
 		c.mu.RUnlock()
+		if c.verbose {
+			fmt.Printf("[dpop] path=%s prover_set=%v\n", ep.Path, prover != nil)
+		}
 		if prover != nil {
 			proof, err := prover(ep, method, &u, payload, cookieValueOf(cookies, "session"), cookieValueOf(cookies, "vpn-token"))
 			if err != nil {
+				fmt.Printf("[dpop] path=%s ERROR=%v\n", ep.Path, err)
 				return nil, fmt.Errorf("生成 DPoP 证明 %s: %w", ep.Path, err)
 			}
 			if proof != "" {
 				req.Header.Set("DPoP", proof)
+				if c.verbose {
+					fmt.Printf("[dpop] path=%s proof_len=%d set_header=DPoP\n", ep.Path, len(proof))
+				}
+			} else if c.verbose {
+				fmt.Printf("[dpop] path=%s proof=EMPTY\n", ep.Path)
 			}
 		}
 	}
@@ -395,7 +404,14 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 		return nil, fmt.Errorf("读取响应 %s: %w", ep.Path, err)
 	}
 	if c.verbose {
-		fmt.Printf("[resp] %d %s\n", resp.StatusCode, truncate(string(raw), 400))
+		apicode := -1
+		var probe map[string]interface{}
+		if json.Unmarshal(raw, &probe) == nil {
+			if v, ok := probe["code"].(float64); ok {
+				apicode = int(v)
+			}
+		}
+		fmt.Printf("[resp] http=%d apicode=%d %s\n", resp.StatusCode, apicode, truncate(string(raw), 400))
 	}
 	if resp.StatusCode != http.StatusOK {
 		// 429/5xx 等由服务端/网关产生，正文可能为空，必须把状态码暴露出来。

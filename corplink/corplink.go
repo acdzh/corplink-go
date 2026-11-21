@@ -164,6 +164,7 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	}
 	// 设备密钥与 v1 签名同时挂上：前者决定能不能拿到 vpn-token，
 	// 后者决定服务端认不认这个客户端。
+	holder := &clientHolder{}
 	dpopStore, err := dpop.Open(cfg.DPoPKeyPath(), cfg.DeviceID)
 	if err != nil {
 		logger.Warn("加载设备密钥失败，DPoP 不可用", "err", err)
@@ -187,10 +188,17 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 	})
 
 	loginSvc := login.New(apiClient, cfg, ag, dpopStore)
+	// 隧道状态变化时清 DNS 缓存：连上后不能继续吃"连上前"解析出的公网答案。
+	ag.SetOnTunnelChange(func() {
+		if client := holder.client; client != nil && client.dns != nil {
+			client.dns.Reset()
+		}
+	})
 	// 连接期二次认证与"会话被终止"都交给登录层处理：前者要算 TOTP，
 	// 后者要清 cookie 与本地会话文件。
 	ag.SetSolveVPNMFA(loginSvc.SolveVPNMFA)
 	ag.SetOnKicked(loginSvc.MarkKicked)
+
 	// 连接失败时按错误码自愈：先换票，必要时重新登记设备密钥。
 	ag.SetRecover(func(ctx context.Context, code int, mode agent.RecoveryMode) error {
 		if mode == agent.RecoveryReconcile {
@@ -200,7 +208,7 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		}
 		return loginSvc.RefreshVPNToken(ctx)
 	})
-	return &Client{
+	client := &Client{
 		cfg:   cfg,
 		api:   apiClient,
 		agent: ag,
@@ -208,7 +216,9 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		dpop:  dpopStore,
 		log:   logger,
 		opts:  opts,
-	}, nil
+	}
+	holder.client = client
+	return client, nil
 }
 
 // Start 解析企业服务端、启动后台循环（测速、自动选路、保活、看门狗）与代理监听。
@@ -689,6 +699,7 @@ func (c *Client) startDNS() error {
 		SplitFunc: func() []string {
 			return append(append([]string{}, c.agent.Domains()...), c.agent.DynamicDomains()...)
 		},
+		ExcludeFunc: c.agent.ExcludeDomains,
 	})
 	if err := server.Start(); err != nil {
 		return err
@@ -813,4 +824,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// clientHolder 用来打破"先建 agent 再建 Client"的顺序依赖：
+// agent 的回调需要访问 Client 上的 DNS 服务实例。
+type clientHolder struct {
+	client *Client
 }

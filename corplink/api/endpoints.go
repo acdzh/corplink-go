@@ -46,7 +46,7 @@ var (
 	EndpointInfoMe        = Endpoint{Path: "/api/info/me"}
 	EndpointMFAType       = Endpoint{Path: "/api/mfa/type"}
 	EndpointMFACodeSend   = Endpoint{Path: "/api/mfa/code/send"}
-	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify"}
+	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify", NeedsDPoP: true}
 	EndpointLogout        = Endpoint{Path: "/api/logout"}
 	EndpointAgreement     = Endpoint{Path: "/api/v1/config/agreement"}
 	EndpointAgreementList = Endpoint{Path: "/api/v2/agreement/signlist"}
