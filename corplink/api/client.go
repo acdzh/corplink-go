@@ -424,7 +424,9 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 	}
 	// 业务体里带 timestamp 时优先用它（秒级整数，比 Date 头更贴近服务端逻辑时钟）。
 	syncFromPayload(env.Data)
-	if env.LoggedOut() {
+	// 只有"本来就带着会话"的请求才可能是被踢；登录链路上服务端也会回
+	// action=logout 之类的字段，误判会把登录流程直接打断。
+	if env.LoggedOut() && cookieValueOf(cookies, "session") != "" {
 		return nil, env.KickedError()
 	}
 	return env, nil

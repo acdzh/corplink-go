@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,8 @@ const (
 	// account 传空串由服务端按会话定位。
 	mfaScene = "feilian"
 	mfaType  = "email"
+	// mfaTypeMobile 是手机短信二次认证。
+	mfaTypeMobile = "mobile"
 	// dpopScene 是设备密钥登记用的 MFA scene（DpopMfaPurpose.DEVICE_KEY_REGISTRATION）。
 	dpopScene = "device_key"
 	// codeTypeOTP 是 TOTP 认证方式的名字。
@@ -259,7 +262,24 @@ func (s *Service) MFA(ctx context.Context, code string) (map[string]any, error) 
 	}
 	data, err := s.auth.MfaVerify(ctx, mfaScene, mfaType, "", code)
 	if err != nil {
-		return nil, err
+		// 方式与验证码不匹配时，按服务端给的 auth_list 依次再试，
+		// 对应官方客户端让用户"换一种方式"的行为。
+		visited := map[string]bool{mfaType: true}
+		for _, candidate := range current.authList {
+			if visited[candidate] {
+				continue
+			}
+			visited[candidate] = true
+			if retried, retryErr := s.auth.MfaVerify(ctx, mfaScene, candidate, "", code); retryErr == nil {
+				s.setFlowMfaType(candidate)
+				s.agent.LogEvent("info", "二次验证改用 %s 方式通过", candidate)
+				data, err = retried, nil
+				break
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("二次验证失败（已尝试 %s）：%w", strings.Join(keysOf(visited), "/"), err)
+		}
 	}
 	if action, _, _ := parseNext(data); action != "" && action != "GoToLink" {
 		return nil, fmt.Errorf("二次验证后仍有步骤: %s", action)
@@ -281,22 +301,24 @@ func (s *Service) pickLoginMfaType(ctx context.Context, authList []string) strin
 			}
 		}
 	}
-	has := func(name string) bool {
-		for _, v := range available {
-			if v == name {
-				return true
-			}
-		}
-		return false
+	fallback := ""
+	if typ, err := s.auth.MfaType(ctx, mfaScene); err == nil && typ != nil {
+		fallback = typ.Type
 	}
-	if s.cfg.Code != "" && (len(available) == 0 || has(codeTypeOTP)) {
-		return codeTypeOTP
-	}
+	return pickMfaType(available, fallback)
+}
+
+// pickMfaType 选登录验证码方式，严格按官方客户端的行为。
+//
+// 官方客户端（LoginV2MfaActivity + list_mfa_type）不猜：它把服务端返回的
+// auth_list 原样列给用户点，默认选中列表第一项；列表为空时才查
+// /api/mfa/type 的 type 字段。这里保持一致——偏好只来自调用方显式指定。
+func pickMfaType(available []string, fallback string) string {
 	if len(available) > 0 {
-		if has(codeTypeOTP) {
-			return codeTypeOTP
-		}
 		return available[0]
+	}
+	if fallback != "" {
+		return fallback
 	}
 	return mfaTypeEmail()
 }
@@ -709,6 +731,15 @@ func aliases(methods []api.ThirdPartyLogin) []string {
 	out := make([]string, 0, len(methods))
 	for _, m := range methods {
 		out = append(out, m.Alias)
+	}
+	return out
+}
+
+// keysOf 把已尝试的方式列出来，便于排障。
+func keysOf(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
 	}
 	return out
 }

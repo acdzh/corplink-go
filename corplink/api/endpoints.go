@@ -46,7 +46,7 @@ var (
 	EndpointInfoMe        = Endpoint{Path: "/api/info/me"}
 	EndpointMFAType       = Endpoint{Path: "/api/mfa/type"}
 	EndpointMFACodeSend   = Endpoint{Path: "/api/mfa/code/send"}
-	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify", NeedsDPoP: true}
+	EndpointMFACodeVerify = Endpoint{Path: "/api/mfa/code/verify"}
 	EndpointLogout        = Endpoint{Path: "/api/logout"}
 	EndpointAgreement     = Endpoint{Path: "/api/v1/config/agreement"}
 	EndpointAgreementList = Endpoint{Path: "/api/v2/agreement/signlist"}
@@ -69,7 +69,7 @@ var (
 // 设备密钥（DPoP）相关接口。
 var (
 	// EndpointDpopStatus 查询本设备密钥的登记状态。
-	EndpointDpopStatus = Endpoint{Path: "/api/v1/device/dpop", NeedsDPoP: true}
+	EndpointDpopStatus = Endpoint{Path: "/api/v1/device/dpop"}
 )
 
 // Meta 是随每个请求上报的客户端元信息。
