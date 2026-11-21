@@ -224,7 +224,7 @@ func (s *Server) resolve(ctx context.Context, query []byte, tcp bool) ([]byte, e
 	key := cacheKey(question)
 	if !tcp {
 		if cached := s.loadCache(key); cached != nil {
-			return cached, nil
+			return withID(cached, query), nil
 		}
 	}
 	upstreams := s.upstreamsFor(question.Name.String())
@@ -382,6 +382,21 @@ func (s *Server) loadCache(key string) []byte {
 		return nil
 	}
 	return entry.msg
+}
+
+// withID 把缓存响应里的报文 ID 换成当前查询的 ID。
+//
+// 缓存的是完整报文，里面还带着上一次查询的 ID；客户端（dig、系统 resolver）
+// 会按 ID 匹配响应，对不上直接丢弃，表现就是"第一次能解析，之后同样域名
+// 全部超时"——这个坑极难从客户端现象上看出来，必须在出口处改 ID。
+func withID(cached, query []byte) []byte {
+	if len(cached) < 2 || len(query) < 2 {
+		return cached
+	}
+	out := make([]byte, len(cached))
+	copy(out, cached)
+	copy(out[:2], query[:2])
+	return out
 }
 
 // saveCache 写缓存。
