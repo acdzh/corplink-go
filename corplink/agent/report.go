@@ -71,7 +71,18 @@ func (a *Agent) stopReport(sendDisconnect bool) {
 	}
 }
 
-// sendReport 发一次上报；响应 code=1000 视为被踢下线。
+// stopReportLoopOnly 停掉周期上报但不再补发 101（避免与断开的处理互相触发）。
+func (a *Agent) stopReportLoopOnly() {
+	a.mu.Lock()
+	stop := a.reportStop
+	a.reportStop = nil
+	a.mu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
+}
+
+// sendReport 发一次上报；响应 code=1000 表示连接被服务端终止（不是登录失效）。
 func (a *Agent) sendReport(typ string) {
 	a.mu.RLock()
 	node := a.reportNode
@@ -107,7 +118,12 @@ func (a *Agent) sendReport(typ string) {
 		return
 	}
 	if env.Code == codeReportKicked {
-		a.addEvent("warn", "服务端已终止本端连接（report code=1000）")
-		a.handleKicked(fmt.Errorf("连接被服务端终止（report 1000）"))
+		// code=1000 只代表"这条隧道连接被服务端终止"，与登录态无关。
+		// 这里绝不能走 handleKicked：那会清 cookie、删 session.json，把一次
+		// 可以自愈的连接抖动升级成"必须重新扫码/收验证码登录"。
+		a.addEvent("warn", "服务端终止了本端连接（report code=1000），保留登录态")
+		a.stopReportLoopOnly()
+		a.Disconnect()
+		return
 	}
 }
