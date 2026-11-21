@@ -8,7 +8,7 @@ services:
       - "13140:13140"   # 控制面板
     volumes:
       - ./data:/data
-    # 面板令牌：不填则每次启动随机生成并打在日志里；填了就固定。
+    # 面板不校验令牌，直接用浏览器打开 http://<主机>:13140/
     command:
       - serve
       - -config
@@ -17,6 +17,4 @@ services:
       - 0.0.0.0:3710
       - -panel
       - 0.0.0.0:13140
-      - -panel-token
-      - ${CORPLINK_PANEL_TOKEN:-}
     # 首次启动前把 config.json 与 session.json 放进 ./data

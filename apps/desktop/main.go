@@ -163,8 +163,12 @@ func main() {
 		}
 	}()
 	panelBase := "http://" + panelListen
-	panelURL := panelBase + "/?token=" + panel.AccessToken()
-	subURL := panelBase + "/clash.yml?token=" + panel.AccessToken()
+	panelURL := panelBase + "/"
+	subURL := panelBase + "/clash.yml"
+	if token := panel.AccessToken(); token != "" {
+		panelURL += "?token=" + token
+		subURL += "?token=" + token
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

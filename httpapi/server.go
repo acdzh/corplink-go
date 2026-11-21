@@ -1,25 +1,22 @@
 // Package httpapi 把 corplink.Client 暴露成 HTTP JSON 契约。
 //
-// 库本身不含任何监听与序列化：这一层只做令牌鉴权、编码与静态资源，
+// 库本身不含任何监听与序列化：这一层只做编码、可选的令牌校验与静态资源，
 // 监听到哪里由端侧决定（CLI 监听本机端口，Android 可以完全不启用）。
 package httpapi
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"embed"
-	"encoding/hex"
 	"errors"
 	"io/fs"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/acdzh/corplink-go/corplink"
 )
 
-// 鉴权参数。
+// 鉴权参数。令牌为空时整个面板不校验，直接用浏览器打开即可。
 const (
 	// tokenHeader 是携带令牌的请求头，供命令行与脚本使用。
 	tokenHeader = "X-Corplink-Token"
@@ -36,36 +33,19 @@ var assets embed.FS
 
 // Server 是控制面板的 HTTP 层。
 type Server struct {
-	// Token 是访问令牌；为空时 Handler 生成随机令牌，只用一次进程生命周期。
+	// Token 是访问令牌；为空表示不校验，任何请求直接放行。
 	Token string
 	// PanelAddr 是面板对外的监听地址，用于拼订阅链接。
 	PanelAddr string
 	// Static 覆盖内置静态资源；为空时用包内嵌的控制面板页面。
 	Static fs.FS
-
-	// tokenOnce 保证随机令牌只生成一次，避免并发请求拿到不同的值。
-	tokenOnce sync.Once
-	// token 是实际生效的令牌。
-	token string
 }
 
-// AccessToken 返回实际生效的令牌，端侧据此打印带令牌的地址。
-func (s *Server) AccessToken() string { return s.ensureToken() }
+// AccessToken 返回当前生效的令牌，为空表示面板不校验。
+func (s *Server) AccessToken() string { return s.Token }
 
-// ensureToken 解析配置的令牌，为空时生成一次性随机令牌。
-func (s *Server) ensureToken() string {
-	s.tokenOnce.Do(func() {
-		s.token = s.Token
-		if s.token == "" {
-			s.token = randomToken()
-		}
-	})
-	return s.token
-}
-
-// Handler 返回面板的 HTTP 处理器；所有路径都要求令牌。
+// Handler 返回面板的 HTTP 处理器。
 func (s *Server) Handler(c *corplink.Client) http.Handler {
-	s.ensureToken()
 	mux := http.NewServeMux()
 	registerAPI(mux, s, c)
 
@@ -99,19 +79,22 @@ func (s *Server) Serve(ctx context.Context, addr string, c *corplink.Client) err
 	return nil
 }
 
-// guard 校验令牌：请求头、查询参数与 Cookie 任一命中即可，
+// guard 在配置了令牌时校验请求：请求头、查询参数与 Cookie 任一命中即可。
 // 带查询参数的一次性访问会换成 Cookie，页面里的 fetch 就不用再拼 token。
 func (s *Server) guard(next http.Handler) http.Handler {
+	if s.Token == "" {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented := s.presentedToken(r)
-		if subtle.ConstantTimeCompare([]byte(presented), []byte(s.ensureToken())) != 1 {
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(s.Token)) != 1 {
 			http.Error(w, "无效的面板令牌：请用带 token 参数的地址打开面板", http.StatusUnauthorized)
 			return
 		}
 		if r.URL.Query().Get(tokenQuery) != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name:     tokenCookie,
-				Value:    s.ensureToken(),
+				Value:    s.Token,
 				Path:     "/",
 				HttpOnly: true,
 				SameSite: http.SameSiteStrictMode,
@@ -133,14 +116,4 @@ func (s *Server) presentedToken(r *http.Request) string {
 		return ck.Value
 	}
 	return ""
-}
-
-// randomToken 生成 32 位十六进制令牌。
-func randomToken() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		// 随机源不可用时退回时间戳，仍比无鉴权好。
-		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
-	}
-	return hex.EncodeToString(buf[:])
 }

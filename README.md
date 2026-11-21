@@ -50,9 +50,9 @@ EOF
 ./corplink serve -config ./data/config.json
 ```
 
-启动时会打印带令牌的面板地址 `http://127.0.0.1:13140/?token=…`；令牌默认随机生成，
-也可以用 `-panel-token` 固定。首次带 token 访问会写入 Cookie，之后直接开根路径也能用。
-令牌对浏览器、脚本与订阅链接都生效，命令行取值加 `-H 'X-Corplink-Token: <token>'`。
+面板默认不校验，直接打开 `http://127.0.0.1:13140/` 即可。
+想加一层校验就起的时候带 `-panel-token <令牌>`，之后访问要带 `?token=` 或请求头
+`X-Corplink-Token`（首次带 token 会写入 Cookie，之后直接开根路径也能用）。
 
 打开面板：
 
@@ -73,8 +73,10 @@ curl -x http://127.0.0.1:3710 http://internal.example.com
 面板里的订阅地址：
 
 ```
-http://127.0.0.1:13140/clash.yml?token=<面板令牌>
+http://127.0.0.1:13140/clash.yml
 ```
+
+（如果起服务时配了 `-panel-token`，链接要补 `?token=<令牌>`。）
 
 导入 Clash Verge 后保持「规则」模式即可。配置里包含控制面域名与节点公网 IP 的防回环直连规则，
 企业内网分流规则来自服务端 `/vpn/conn` 下发的网段与域名后缀，未命中走 `MATCH,DIRECT`。
@@ -132,15 +134,16 @@ CMD      serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:1314
 ```
 
 也就是容器内跑的就是 CLI 的 `serve`：混合代理在 3710，面板在 13140，状态落在 `/data`
-（`config.json` + `session.json`）。面板默认监听 `0.0.0.0`，**记得用 `-panel-token` 固定令牌**，
-否则每次重启都会换一个：
+（`config.json` + `session.json`）。面板监听 `0.0.0.0` 且默认不校验令牌，
+同网段能连到 13140 的人都能直接打开面板 —— 只想本机用就把 `-panel` 改成 `127.0.0.1:13140`，
+或者加 `-panel-token` 让请求必须带令牌：
 
 ```bash
 docker run -d --name corp-link \
   -p 3710:3710 -p 13140:13140 \
   -v "$PWD/data:/data" \
   corplink-go:latest \
-  serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:13140 -panel-token 你的令牌
+  serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:13140
 ```
 
 > 本机实测：Docker Hub 直连不可达，daemon 的 `registry-mirrors` 指向 `mirrors.byted.org`
