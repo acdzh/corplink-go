@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux
 # 允许构建时覆盖模块代理（国内网络建议 goproxy.cn）
@@ -10,7 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/corplink ./cmd/corplink-go
+RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/corplink ./apps/cli
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/corplink /usr/local/bin/corplink

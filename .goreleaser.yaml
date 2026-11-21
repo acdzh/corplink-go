@@ -4,7 +4,7 @@ project_name: corplink-go
 
 builds:
   - id: corplink
-    main: ./cmd/corplink-go
+    main: ./apps/cli
     binary: corplink
     env:
       - CGO_ENABLED=0

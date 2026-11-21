@@ -12,10 +12,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
       - name: vet
         run: go vet ./...
       - name: test
         run: go test ./...
       - name: build
         run: go build ./...
+      - name: 库不能依赖 HTTP 层与端侧
+        run: |
+          leaked=$(go list -deps ./corplink/... | grep -E 'corplink-go/(httpapi|apps)' || true)
+          if [ -n "$leaked" ]; then
+            echo "库出现了反向依赖："
+            echo "$leaked"
+            exit 1
+          fi
+      - name: 库与 Android 门面的交叉编译
+        run: |
+          GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build ./corplink/... ./apps/android/bind
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./corplink/... ./apps/cli
