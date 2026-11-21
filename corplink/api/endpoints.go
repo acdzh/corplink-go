@@ -70,6 +70,11 @@ var (
 var (
 	// EndpointDpopStatus 查询本设备密钥的登记状态。
 	EndpointDpopStatus = Endpoint{Path: "/api/v1/device/dpop"}
+	// EndpointDeviceReport 上报设备信息。
+	//
+	// 它不只是"统计"：服务端没收到这台设备的报告时，/vpn/conn 会回
+	// 3015「Session 无效」——设备在库里不存在，节点层就认不出这个会话。
+	EndpointDeviceReport = Endpoint{Path: "/api/device/report"}
 )
 
 // Meta 是随每个请求上报的客户端元信息。

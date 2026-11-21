@@ -482,7 +482,14 @@ func (s *Store) Key() (*Key, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.key != nil && s.key.deviceID == s.deviceID && s.deviceID != "" {
+	if s.key != nil {
+		// device_id 对不上时绝不能"顺手换一把新钥匙"：那会覆盖掉服务端已经
+		// 登记的那把，当前会话立刻失去设备证明，服务端只会回一个含糊的
+		// 3015「Session 无效」，看起来像登录状态坏了。换钥匙必须走 Reset()。
+		if s.key.deviceID != s.deviceID {
+			return nil, fmt.Errorf("设备密钥属于 %s，与当前 device_id %s 不一致；请删除 %s 后重新登录",
+				s.key.deviceID, s.deviceID, s.path)
+		}
 		return s.key, nil
 	}
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

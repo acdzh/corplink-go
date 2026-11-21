@@ -206,7 +206,8 @@ func LoginSendMFA(mfaType string) error {
 	if c == nil {
 		return errNotStarted
 	}
-	return c.LoginSendMFA(context.Background(), mfaType)
+	_, err := c.LoginSendMFA(context.Background(), mfaType)
+	return err
 }
 
 // LoginMFA 提交二次验证码，返回 JSON。

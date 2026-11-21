@@ -101,7 +101,7 @@ type Config struct {
 // SessionPath 为空，登录态与 TOTP 由调用方自己决定存哪。
 func Default() *Config {
 	return &Config{
-		DeviceName:  "corplink-go",
+		DeviceName:  "Pixel 7",
 		DeviceModel: "Pixel 7",
 		DeviceBrand: "google",
 		OSVersion:   "33",

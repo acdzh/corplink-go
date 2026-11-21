@@ -45,6 +45,10 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 			"dns_addr":       st.DNSAddr,
 			"kicked":         st.Kicked,
 			"kick_reason":    st.KickReason,
+			"mfa_type":       st.MFAType,
+			"mfa_options":    st.MFAOptions,
+			"mfa_email":      st.MFAEmail,
+			"mfa_mobile":     st.MFAMobile,
 		})
 	})
 	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, _ *http.Request) {
@@ -201,11 +205,12 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 		}
-		if err := c.LoginSendMFA(r.Context(), in.Type); err != nil {
+		mfaType, err := c.LoginSendMFA(r.Context(), in.Type)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, map[string]bool{"sent": true})
+		writeJSON(w, map[string]any{"sent": true, "type": mfaType})
 	})
 	mux.HandleFunc("/api/login/mfa", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -214,12 +219,13 @@ func registerAPI(mux *http.ServeMux, s *Server, c *corplink.Client) {
 		}
 		var in struct {
 			Code string `json:"code"`
+			Type string `json:"type"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, "解析请求体: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		result, err := c.LoginMFA(r.Context(), in.Code)
+		result, err := c.LoginMFAWith(r.Context(), in.Code, in.Type)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

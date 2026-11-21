@@ -868,7 +868,7 @@ func main() {
 
 						if st.mfaRequired || rt.LoginPending() {
 							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-								ui.TextInput(c, &st.mfaInput).Grow(1).Placeholder("2FA 验证码（已绑定 TOTP 可留空）")
+								ui.TextInput(c, &st.mfaInput).Grow(1).Placeholder("2FA 验证码（默认邮箱）")
 								if ui.Button(c, "发送邮箱码").Disabled(st.loginBusy).Clicked() {
 									updateUI(func() {
 										st.loginBusy = true
@@ -876,7 +876,7 @@ func main() {
 									go func() {
 										reqCtx, reqCancel := context.WithTimeout(ctx, 15*time.Second)
 										defer reqCancel()
-										err := rt.LoginSendMFA(reqCtx, "email")
+										_, err := rt.LoginSendMFA(reqCtx, "email")
 										updateUI(func() {
 											st.loginBusy = false
 											if err != nil {

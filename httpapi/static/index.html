@@ -861,8 +861,9 @@
       <div class="step-box" id="loginStep3" style="display:none">
         <div class="muted" id="mfaPrompt" style="margin-bottom:6px">第 3 步：完成二次验证：</div>
         <div class="row">
-          <input id="mfaCode" placeholder="输入验证码（已绑定 TOTP 可留空自动填）" style="flex:1">
-          <button class="sm" id="btnSendMfa">发送邮箱验证码</button>
+          <select id="mfaType" title="验证码方式"></select>
+          <input id="mfaCode" placeholder="输入验证码" style="flex:1">
+          <button class="sm" id="btnSendMfa">发送验证码</button>
           <button class="primary" id="btnMfa">提交验证</button>
         </div>
       </div>
@@ -1279,9 +1280,7 @@ function renderStatus() {
   }
 
   if (resp.mfa_pending) {
-    $('mfaPrompt').textContent = resp.has_totp
-      ? '第 3 步：已绑定本地 TOTP，可直接留空自动填码验证，或手动输入验证码：'
-      : '第 3 步：请输入二次验证码，或点击发送邮箱验证码：';
+    renderMfaOptions(resp.mfa_options || [], resp.mfa_type || '');
   }
 
   const pills = $('tunnelPills');
@@ -1743,6 +1742,42 @@ function renderLoginMethods(methods) {
   }
 }
 
+// MFA_LABELS 是二次验证方式的中文名。
+const MFA_LABELS = { email: '邮箱', mobile: '短信', otp: '本地 TOTP', password: '密码', passkey: 'Passkey' };
+
+// mfaLabel 把服务端的 code_type 转成给人看的名字。
+function mfaLabel(t) {
+  return MFA_LABELS[t] || t || '';
+}
+
+// renderMfaOptions 按服务端的 auth_list 渲染方式选择器，默认选中 mfa_type。
+function renderMfaOptions(options, current) {
+  const sel = $('mfaType');
+  const list = options && options.length ? options : ['email'];
+  sel.innerHTML = list.map((t) => '<option value="' + esc(t) + '">' + esc(mfaLabel(t)) + '</option>').join('');
+  if (current && list.indexOf(current) >= 0) {
+    sel.value = current;
+  }
+  updateMfaPrompt();
+}
+
+// updateMfaPrompt 说明当前方式与码会发到哪里（服务端给的是脱敏账号）。
+function updateMfaPrompt(hint) {
+  const sel = $('mfaType');
+  if (!sel) return;
+  const t = sel.value || 'email';
+  const st = serverStatus || {};
+  let where = '';
+  if (t === 'email' && st.mfa_email) where = '（' + st.mfa_email + '）';
+  if (t === 'mobile' && st.mfa_mobile) where = '（' + st.mfa_mobile + '）';
+  const btn = $('btnSendMfa');
+  btn.style.display = t === 'otp' ? 'none' : '';
+  btn.textContent = '发送' + mfaLabel(t) + '验证码';
+  $('mfaPrompt').textContent = hint || (t === 'otp'
+    ? '第 3 步：留空提交即用本地 TOTP 计算验证码'
+    : '第 3 步：选择方式后点发送，验证码会发到' + mfaLabel(t) + where);
+}
+
 async function loadLoginMethods() {
   try {
     const r = await api('/api/login/methods');
@@ -1792,9 +1827,10 @@ async function submitCallback() {
     });
     if (r.mfa_required) {
       $('loginStep3').style.display = 'block';
-      $('mfaPrompt').textContent = r.has_totp
-        ? '第 3 步：已绑定本地 TOTP，可直接留空自动填码验证，或手动输入验证码：'
-        : '第 3 步：请输入二次验证码，或点击发送邮箱验证码：';
+      renderMfaOptions(r.auth_list || [], r.mfa_type || 'email');
+      if (r.email) serverStatus = Object.assign({}, serverStatus || {}, { mfa_email: r.email });
+      if (r.mobile) serverStatus = Object.assign({}, serverStatus || {}, { mfa_mobile: r.mobile });
+      updateMfaPrompt();
       $('loginTip').textContent = '回调校验通过，需要完成二次验证';
       await refreshStatus();
       return;
@@ -1816,28 +1852,32 @@ async function submitCallback() {
 }
 
 async function sendMfaCode() {
-  $('btnSendMfa').disabled = true;
+  const type = $('mfaType').value || 'email';
+  const btn = $('btnSendMfa');
+  btn.disabled = true;
   try {
-    await api('/api/login/mfa/send', {
+    const r = await api('/api/login/mfa/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'email' }),
+      body: JSON.stringify({ type }),
     });
-    $('loginTip').textContent = '已发送邮箱验证码，请注意查收';
+    const used = r.type || type;
+    $('loginTip').textContent = '已发送' + mfaLabel(used) + '验证码，请注意查收';
     showToast('验证码已发送');
+    const label = '发送' + mfaLabel(used) + '验证码';
     let left = 30;
     const timer = setInterval(() => {
       left--;
       if (left <= 0) {
         clearInterval(timer);
-        $('btnSendMfa').disabled = false;
-        $('btnSendMfa').textContent = '发送邮箱验证码';
+        btn.disabled = false;
+        btn.textContent = label;
       } else {
-        $('btnSendMfa').textContent = '已发送 (' + left + 's)';
+        btn.textContent = '已发送 (' + left + 's)';
       }
     }, 1000);
   } catch (e) {
-    $('btnSendMfa').disabled = false;
+    btn.disabled = false;
     $('loginTip').textContent = e.message;
     showToast('发送验证码失败: ' + e.message, true);
   }
@@ -1849,7 +1889,7 @@ async function submitMfa() {
     const r = await api('/api/login/mfa', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: $('mfaCode').value.trim() }),
+      body: JSON.stringify({ code: $('mfaCode').value.trim(), type: $('mfaType').value || '' }),
     });
     $('loginTip').textContent = '登录成功，获取到 ' + (r.nodes || 0) + ' 个节点';
     $('loginStep2').style.display = 'none';
@@ -1942,6 +1982,7 @@ $('callback').onkeydown = (e) => {
   }
 };
 $('btnSendMfa').onclick = sendMfaCode;
+$('mfaType').onchange = () => updateMfaPrompt();
 $('btnMfa').onclick = submitMfa;
 $('mfaCode').onkeydown = (e) => {
   if (e.key === 'Enter') {

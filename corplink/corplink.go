@@ -21,6 +21,7 @@ import (
 
 	"github.com/acdzh/corplink-go/corplink/agent"
 	"github.com/acdzh/corplink-go/corplink/api"
+	"github.com/acdzh/corplink-go/corplink/auth"
 	"github.com/acdzh/corplink-go/corplink/clock"
 	"github.com/acdzh/corplink-go/corplink/config"
 	"github.com/acdzh/corplink-go/corplink/dnsserver"
@@ -185,6 +186,9 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		DeviceLogger: newDeviceLogger(logger, opts.Verbose),
 		DPoP:         dpopStore,
 		Verbose:      opts.Verbose,
+		ReportDevice: func(ctx context.Context) error {
+			return reportDevice(ctx, apiClient, cfg)
+		},
 	})
 
 	loginSvc := login.New(apiClient, cfg, ag, dpopStore)
@@ -386,17 +390,26 @@ type Status struct {
 	KickReason string `json:"kick_reason,omitempty"`
 	// DNSAddr 是本地 DNS 监听地址。
 	DNSAddr string `json:"dns_addr,omitempty"`
+	// MFAType 是二次验证当前选用的方式（email / mobile / otp）。
+	MFAType string `json:"mfa_type,omitempty"`
+	// MFAOptions 是服务端给出的可用方式，面板据此让用户切换。
+	MFAOptions []string `json:"mfa_options,omitempty"`
+	// MFAEmail 是服务端回显的脱敏邮箱。
+	MFAEmail string `json:"mfa_email,omitempty"`
+	// MFAMobile 是服务端回显的脱敏手机号。
+	MFAMobile string `json:"mfa_mobile,omitempty"`
 }
 
 // Status 汇总当前状态。
 func (c *Client) Status() Status {
 	keyID, bound, needCode, _ := c.login.DeviceKeyState()
 	kicked, kickReason := c.login.Kicked()
+	mfaPending, mfaType, mfaOptions, mfaEmail, mfaMobile := c.login.MfaState()
 	return Status{
 		State:        c.agent.State(),
 		LoggedIn:     c.agent.LoggedIn(),
 		Error:        c.agent.LastError(),
-		MFAPending:   c.login.Pending(),
+		MFAPending:   mfaPending,
 		Mode:         c.agent.Mode(),
 		Auto:         c.agent.Auto(),
 		CompanyName:  c.cfg.CompanyName,
@@ -409,6 +422,10 @@ func (c *Client) Status() Status {
 		Kicked:       kicked,
 		KickReason:   kickReason,
 		DNSAddr:      c.dnsAddr,
+		MFAType:      mfaType,
+		MFAOptions:   mfaOptions,
+		MFAEmail:     mfaEmail,
+		MFAMobile:    mfaMobile,
 	}
 }
 
@@ -565,22 +582,19 @@ func (c *Client) LoginCallback(ctx context.Context, callback string) (map[string
 	return c.login.Callback(ctx, callback)
 }
 
-// LoginSendMFA 请求下发二次验证码。
-func (c *Client) LoginSendMFA(ctx context.Context, mfaType string) error {
+// LoginSendMFA 请求下发二次验证码，返回实际使用的方式。
+func (c *Client) LoginSendMFA(ctx context.Context, mfaType string) (string, error) {
 	return c.login.SendMFA(ctx, strings.TrimSpace(mfaType))
 }
 
-// LoginMFA 提交二次验证码；留空且已绑定 TOTP 时自动生成。
+// LoginMFA 提交二次验证码；方式沿用流程里已选定的那个。
 func (c *Client) LoginMFA(ctx context.Context, code string) (map[string]any, error) {
-	code = strings.TrimSpace(code)
-	if code == "" && c.cfg.Code != "" {
-		generated, _, err := totp.Code(c.cfg.Code, clock.Now())
-		if err != nil {
-			return nil, fmt.Errorf("生成 TOTP: %w", err)
-		}
-		code = generated
-	}
-	return c.login.MFA(ctx, code)
+	return c.login.MFA(ctx, strings.TrimSpace(code), "")
+}
+
+// LoginMFAWith 指定验证码方式提交二次验证（面板切换 email / mobile 时用）。
+func (c *Client) LoginMFAWith(ctx context.Context, code, mfaType string) (map[string]any, error) {
+	return c.login.MFA(ctx, strings.TrimSpace(code), strings.TrimSpace(mfaType))
 }
 
 // LoginPending 表示登录流程是否在等待二次验证码。
@@ -684,6 +698,11 @@ func (c *Client) ClashProfile() string {
 		DynamicDomains: c.agent.DynamicDomains(),
 		VPNDNS:         c.agent.VPNDNS(),
 	})
+}
+
+// reportDevice 用当前会话补报一次设备信息（/vpn/conn 回 3015 时自愈用）。
+func reportDevice(ctx context.Context, client *api.Client, cfg *config.Config) error {
+	return auth.NewService(client).ReportDevice(ctx, false, config.Meta(cfg), cfg.DeviceName, cfg.DeviceModel, cfg.DeviceBrand)
 }
 
 // startDNS 启动本地 DNS 服务。

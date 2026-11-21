@@ -41,6 +41,24 @@ const (
 	codeTypeOTP = "otp"
 )
 
+// loginMfaPreference 是无人值守时自动选二次认证方式的顺序。
+//
+// 官方客户端（LoginV2MfaActivity）把服务端 auth_list 原样列给用户点，默认第一项；
+// 我们把列表也给面板点，但"默认值"必须按能否确定送达来定：email 一定收得到，
+// otp 依赖本地 secret，mobile 依赖账号绑过手机号——本租户的 type 就是 mobile，
+// 账号没绑手机时选它等于登录卡死（验证码永远不会到）。
+var loginMfaPreference = []string{mfaType, codeTypeOTP, mfaTypeMobile}
+
+// supportedLoginAuth 是官方 isAuthNotSupport 的白名单：
+// 服务端可能下发客户端并不支持的认证方式，官方会先把它们剔掉再展示。
+var supportedLoginAuth = map[string]bool{
+	"email":    true,
+	"mobile":   true,
+	"otp":      true,
+	"password": true,
+	"passkey":  true,
+}
+
 // flow 是一次进行中的登录。
 type flow struct {
 	verifier  string
@@ -50,6 +68,9 @@ type flow struct {
 	authList  []string
 	// mfaType 是本次登录实际使用的验证码方式，下发与校验必须一致。
 	mfaType string
+	// email / mobile 是服务端给的回显账号（已脱敏），供面板提示"码发到哪"。
+	email  string
+	mobile string
 }
 
 // dpopState 是设备密钥登记的当前状态，供面板展示。
@@ -203,44 +224,58 @@ func (s *Service) Callback(ctx context.Context, raw string) (map[string]any, err
 	if err != nil {
 		return nil, err
 	}
-	action, list, _ := parseNext(data)
-	if action == "2FA" {
+	next := parseNext(data)
+	if next.Action == "2FA" {
+		options := supportedAuthTypes(next.AuthList)
+		chosen := s.pickLoginMfaType(ctx, options)
 		s.mu.Lock()
 		s.current.mfa = true
-		s.current.authList = list
+		s.current.authList = options
+		s.current.mfaType = chosen
+		s.current.email = next.Email
+		s.current.mobile = next.Mobile
 		s.mu.Unlock()
-		s.agent.LogEvent("info", "授权回调成功，等待二次验证")
+		s.agent.LogEvent("info", "授权回调成功，等待二次验证（默认 %s，可用 %s）", chosen, strings.Join(options, "/"))
 		return map[string]any{
 			"mfa_required": true,
-			"auth_list":    list,
+			"auth_list":    options,
+			"mfa_type":     chosen,
+			"email":        next.Email,
+			"mobile":       next.Mobile,
 			"has_totp":     s.cfg.Code != "",
 		}, nil
 	}
-	if action != "" {
-		return nil, fmt.Errorf("服务端要求暂不支持的步骤: %s", action)
+	if next.Action != "" {
+		return nil, fmt.Errorf("服务端要求暂不支持的步骤: %s", next.Action)
 	}
 	return s.finish(ctx)
 }
 
-// SendMFA 在等待二次验证阶段主动下发邮箱或短信验证码。
-func (s *Service) SendMFA(ctx context.Context, mfaType string) error {
+// SendMFA 在等待二次验证阶段下发验证码，返回实际使用的方式。
+//
+// mfaType 为空时用流程里已选定的方式（见 pickMfaType 的排序）。
+func (s *Service) SendMFA(ctx context.Context, mfaType string) (string, error) {
 	s.mu.Lock()
 	current := s.current
 	s.mu.Unlock()
 	if current == nil || !current.mfa {
-		return fmt.Errorf("当前没有等待验证码的登录")
+		return "", fmt.Errorf("当前没有等待验证码的登录")
 	}
 	if mfaType == "" {
-		// 不再写死 email：向服务端协商本租户真正可用的方式，
-		// 已经有 TOTP secret 时优先 otp（无需等外部消息）。
+		mfaType = current.mfaType
+	}
+	if mfaType == "" {
 		mfaType = s.pickLoginMfaType(ctx, current.authList)
+	}
+	if !mfaTypeAllowed(mfaType, current.authList) {
+		return "", fmt.Errorf("本租户不支持 %s 认证（可用: %s）", mfaType, strings.Join(current.authList, "/"))
 	}
 	s.setFlowMfaType(mfaType)
 	if _, err := s.auth.MfaSend(ctx, mfaScene, mfaType, ""); err != nil {
-		return err
+		return mfaType, err
 	}
 	s.agent.LogEvent("info", "已请求下发二次验证码（%s）", mfaType)
-	return nil
+	return mfaType, nil
 }
 
 // mfaTypeEmail 返回默认的 MFA 验证码下发类型。
@@ -248,72 +283,81 @@ func mfaTypeEmail() string {
 	return mfaType
 }
 
-// MFA 提交二次验证码；TOTP secret 存在时调用方可以自动生成。
-func (s *Service) MFA(ctx context.Context, code string) (map[string]any, error) {
+// MFA 提交二次验证码并完成登录。
+//
+// mfaType 为空时用流程里已选定的方式：下发与校验必须是同一个 mfa_type，
+// 否则服务端会按"验证码不属于该方式"直接拒绝。同一个码在不同方式间乱试
+// 只会把真正的失败原因（发码失败 / 没绑手机 / 码过期）盖掉，所以这里不再回退。
+func (s *Service) MFA(ctx context.Context, code, mfaType string) (map[string]any, error) {
 	s.mu.Lock()
 	current := s.current
 	s.mu.Unlock()
 	if current == nil || !current.mfa {
 		return nil, fmt.Errorf("当前没有等待验证码的登录")
 	}
-	mfaType := current.mfaType
+	if mfaType == "" {
+		mfaType = current.mfaType
+	}
 	if mfaType == "" {
 		mfaType = s.pickLoginMfaType(ctx, current.authList)
 	}
+	// 只有服务端确实支持 otp 时才用本地 TOTP 兜底：feilian 场景通常只给
+	// mobile/email，用 TOTP 去校验必然失败。
+	if code == "" && mfaType == codeTypeOTP && s.cfg.Code != "" {
+		generated, _, err := totp.Code(s.cfg.Code, clock.Now())
+		if err != nil {
+			return nil, fmt.Errorf("生成 TOTP: %w", err)
+		}
+		code = generated
+	}
+	if code == "" {
+		return nil, fmt.Errorf("请先输入 %s 验证码", mfaType)
+	}
+	s.setFlowMfaType(mfaType)
 	data, err := s.auth.MfaVerify(ctx, mfaScene, mfaType, "", code)
 	if err != nil {
-		// 方式与验证码不匹配时，按服务端给的 auth_list 依次再试，
-		// 对应官方客户端让用户"换一种方式"的行为。
-		visited := map[string]bool{mfaType: true}
-		for _, candidate := range current.authList {
-			if visited[candidate] {
-				continue
-			}
-			visited[candidate] = true
-			if retried, retryErr := s.auth.MfaVerify(ctx, mfaScene, candidate, "", code); retryErr == nil {
-				s.setFlowMfaType(candidate)
-				s.agent.LogEvent("info", "二次验证改用 %s 方式通过", candidate)
-				data, err = retried, nil
-				break
-			}
-		}
-		if err != nil {
-			return nil, fmt.Errorf("二次验证失败（已尝试 %s）：%w", strings.Join(keysOf(visited), "/"), err)
-		}
+		return nil, fmt.Errorf("二次验证失败（方式 %s%s）: %w", mfaType, optionHint(current.authList), err)
 	}
-	if action, _, _ := parseNext(data); action != "" && action != "GoToLink" {
-		return nil, fmt.Errorf("二次验证后仍有步骤: %s", action)
+	if next := parseNext(data); next.Action != "" && next.Action != "GoToLink" {
+		return nil, fmt.Errorf("二次验证后仍有步骤: %s", next.Action)
 	}
 	return s.finish(ctx)
 }
 
 // pickLoginMfaType 选一个可用的登录 MFA 方式。
 //
-// 顺序：本地有 TOTP secret 且服务端支持 otp → otp；否则取服务端返回列表的第一个；
-// 列表为空时退回 email（兼容老租户）。
+// auth_list 优先；为空时向服务端协商（/api/mfa/type），再退回 email。
 func (s *Service) pickLoginMfaType(ctx context.Context, authList []string) string {
-	available := authList
-	if len(available) == 0 {
-		if typ, err := s.auth.MfaType(ctx, mfaScene); err == nil && typ != nil {
-			available = typ.Types
-			if len(available) == 0 && typ.Type != "" {
-				available = []string{typ.Type}
-			}
-		}
+	available := supportedAuthTypes(authList)
+	// 回调已经给出 auth_list 时不再多打一次接口：这一步是登录最敏感的位置，
+	// 少一个失败点比省一行代码重要。
+	if len(available) > 0 {
+		return pickMfaType(available, "")
 	}
 	fallback := ""
 	if typ, err := s.auth.MfaType(ctx, mfaScene); err == nil && typ != nil {
 		fallback = typ.Type
+		available = typ.Types
+		if len(available) == 0 && typ.Type != "" {
+			available = []string{typ.Type}
+		}
 	}
-	return pickMfaType(available, fallback)
+	return pickMfaType(supportedAuthTypes(available), fallback)
 }
 
-// pickMfaType 选登录验证码方式，严格按官方客户端的行为。
+// pickMfaType 按 loginMfaPreference 选默认的验证码方式。
 //
-// 官方客户端（LoginV2MfaActivity + list_mfa_type）不猜：它把服务端返回的
-// auth_list 原样列给用户点，默认选中列表第一项；列表为空时才查
-// /api/mfa/type 的 type 字段。这里保持一致——偏好只来自调用方显式指定。
+// 排序理由见 loginMfaPreference：email 一定收得到，otp 要有本地 secret，
+// mobile 要账号绑过手机号。列表里没有偏好项时退回服务端顺序第一项，
+// 再退回 /api/mfa/type 的 type，最后退回 email。用户显式指定时不会走到这里。
 func pickMfaType(available []string, fallback string) string {
+	for _, want := range loginMfaPreference {
+		for _, got := range available {
+			if got == want {
+				return want
+			}
+		}
+	}
 	if len(available) > 0 {
 		return available[0]
 	}
@@ -321,6 +365,44 @@ func pickMfaType(available []string, fallback string) string {
 		return fallback
 	}
 	return mfaTypeEmail()
+}
+
+// supportedAuthTypes 剔掉客户端不支持的认证方式，保持服务端顺序。
+func supportedAuthTypes(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "" || !supportedLoginAuth[item] {
+			continue
+		}
+		if !containsType(out, item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// containsType 判断列表里是否已有该方式。
+func containsType(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// mfaTypeAllowed 判断该方式是否在服务端给出的可用列表里（列表为空时不拦）。
+func mfaTypeAllowed(typ string, available []string) bool {
+	return len(available) == 0 || containsType(available, typ)
+}
+
+// optionHint 生成"（可用: email/mobile）"后缀，便于定位失败原因。
+func optionHint(available []string) string {
+	if len(available) == 0 {
+		return ""
+	}
+	return "，可用: " + strings.Join(available, "/")
 }
 
 // setFlowMfaType 把选定的 MFA 方式记回当前流程。
@@ -383,6 +465,12 @@ func (s *Service) finish(ctx context.Context) (map[string]any, error) {
 
 	// 未签协议会让"登录成功但拉不到节点"，先补签再做后面的登记与刷新。
 	s.ensureAgreement(ctx)
+
+	// 设备上报必须早于任何连接尝试：服务端设备表里没有这台设备时，
+	// /vpn/conn 只会回 3015「Session 无效」（实测：报完立刻就能连上）。
+	if err := s.auth.ReportDevice(ctx, true, config.Meta(s.cfg), s.cfg.DeviceName, s.cfg.DeviceModel, s.cfg.DeviceBrand); err != nil {
+		s.agent.LogEvent("warn", "设备上报失败: %v", err)
+	}
 
 	// 设备密钥登记要在会话有效期内做完：服务端只给"会话 + 已登记公钥"
 	// 的组合签发 vpn-token，没有 vpn-token 时 /vpn/conn 必然 3015。
@@ -710,20 +798,47 @@ func (s *Service) Pending() bool {
 	return s.current != nil && s.current.mfa
 }
 
+// MfaState 返回二次验证阶段的当前状态，供面板渲染可选项与提示。
+func (s *Service) MfaState() (pending bool, mfaType string, options []string, email, mobile string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil || !s.current.mfa {
+		return false, "", nil, "", ""
+	}
+	return true, s.current.mfaType, append([]string(nil), s.current.authList...), s.current.email, s.current.mobile
+}
+
+// loginNext 是 LoginV2Result.next 的子集（字段名与官方 bean 一致）。
+type loginNext struct {
+	// Action 是下一步动作，2FA / GoToLink / OpenWebview / ChangeInitPassword 等。
+	Action string
+	// AuthList 是可用的二次认证方式。
+	AuthList []string
+	// Email / Mobile 是服务端回显的脱敏账号。
+	Email  string
+	Mobile string
+}
+
 // parseNext 解析 LoginV2Result 的下一步动作与可用认证方式。
-func parseNext(data []byte) (string, []string, string) {
+func parseNext(data []byte) loginNext {
 	var parsed struct {
 		Result string `json:"result"`
 		Next   struct {
 			Action   string   `json:"action"`
 			AuthList []string `json:"auth_list"`
 			Email    string   `json:"email"`
+			Mobile   string   `json:"mobile"`
 		} `json:"next"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", nil, ""
+		return loginNext{}
 	}
-	return parsed.Next.Action, parsed.Next.AuthList, parsed.Next.Email
+	return loginNext{
+		Action:   parsed.Next.Action,
+		AuthList: parsed.Next.AuthList,
+		Email:    parsed.Next.Email,
+		Mobile:   parsed.Next.Mobile,
+	}
 }
 
 // aliases 提取可用登录方式，便于报错提示。
@@ -731,15 +846,6 @@ func aliases(methods []api.ThirdPartyLogin) []string {
 	out := make([]string, 0, len(methods))
 	for _, m := range methods {
 		out = append(out, m.Alias)
-	}
-	return out
-}
-
-// keysOf 把已尝试的方式列出来，便于排障。
-func keysOf(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
 	}
 	return out
 }

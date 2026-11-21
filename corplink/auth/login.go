@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/acdzh/corplink-go/corplink/api"
 )
@@ -39,11 +40,10 @@ func (s *Service) Setting(ctx context.Context) (*api.LoginSetting, error) {
 // withOS 为真时附带 os/os_version 查询参数：服务端据此下发可轮询的 token 形态；
 // 不带时是移动端 PKCE 形态（返回带 state_key 的 login_url）。
 func (s *Service) TPSLink(ctx context.Context, challenge string, withOS bool) ([]api.ThirdPartyLogin, error) {
+	// 服务端按 query 里的 os/os_version 判断下发哪种形态：带上下文是移动端 PKCE。
+	// 元信息由 api.Client 统一拼在 query 上，这里只需要挑战码；withOS 仅影响
+	// 调用方语义（探测时两种形态都试），不再重复拼参数。
 	q := url.Values{"code_challenge": {challenge}}
-	if !withOS {
-		// 纯 PKCE 形态（不带客户端元信息）仅用于探测，正常登录必须带上。
-		q = url.Values{"code_challenge": {challenge}}
-	}
 	env, err := s.client.Do(ctx, api.EndpointTPSLink, q, nil)
 	if err != nil {
 		return nil, err
@@ -299,6 +299,78 @@ func (s *Service) SignAgreement(ctx context.Context, keys []string) error {
 		return env.Error()
 	}
 	return nil
+}
+
+// ReportDevice 上报本机设备信息（/api/device/report）。
+//
+// 官方客户端在登录成功后用 newLogin=true 报一次，运行期再周期上报。
+// 这台设备在服务端的设备表里存在之后，节点才会认这个会话：
+// 少了这一步，/vpn/conn 会回 3015「Session 无效」，报完立刻就能连。
+func (s *Service) ReportDevice(ctx context.Context, newLogin bool, meta api.Meta, name, model, brand string) error {
+	payload := map[string]any{"new_login": newLogin, "items": deviceReportItems(meta, name, model, brand)}
+	env, err := s.client.Do(ctx, api.EndpointDeviceReport, nil, payload)
+	if err != nil {
+		return err
+	}
+	if !env.OK() {
+		return env.Error()
+	}
+	return nil
+}
+
+// deviceReportItems 生成设备上报的 items。
+//
+// 官方客户端报的是本机真实的内存/磁盘/CPU/网卡，我们只对齐字段形状，
+// 填固定的合理值：服务端要的是"这台设备存在且有画像"，不是精确读数。
+// device_name / model / brand 额外带上，控制台"登录设备"里才有名字可显示，
+// 否则只会看到一排 "Android"（官方客户端由系统给出设备名）。
+func deviceReportItems(meta api.Meta, name, model, brand string) []map[string]any {
+	if model == "" {
+		model = meta.Model
+	}
+	if brand == "" {
+		brand = meta.Brand
+	}
+	name = reportDeviceName(name, model)
+	return []map[string]any{
+		{"key": "device_name", "value": name},
+		{"key": "model", "value": model},
+		{"key": "brand", "value": brand},
+		{"key": "memory_total", "value": 8},
+		{"key": "memory_available", "value": 4},
+		{"key": "disk_total", "value": 256},
+		{"key": "disk_available", "value": 128},
+		{"key": "cpu_model", "value": "Tensor G2"},
+		{"key": "os_model", "value": "android"},
+		{"key": "os_detail_version", "value": meta.OSVersion},
+		{"key": "nic_detail_list", "value": map[string]any{
+			"wlan0": map[string]any{
+				"mac_addr":   "3c:5a:b4:1a:2b:3c",
+				"active":     true,
+				"ipv4":       "192.168.1.100",
+				"ipv6":       []string{},
+				"dns":        []string{"192.168.1.1"},
+				"is_virtual": false,
+			},
+		}},
+	}
+}
+
+// reportDeviceName 返回可以外发的设备名。
+//
+// 设备名会显示在租户控制台的"登录设备"里，属于对外暴露面：绝不能带本项目
+// 的痕迹（corplink-go / corplink 等），否则一眼就能看出不是官方客户端。
+// 名字缺失或命中黑名单时退回机型名（如 Pixel 7），这是官方客户端也会显示的值。
+func reportDeviceName(name, model string) string {
+	trimmed := strings.TrimSpace(name)
+	lower := strings.ToLower(trimmed)
+	if trimmed == "" || strings.Contains(lower, "corplink") {
+		trimmed = strings.TrimSpace(model)
+	}
+	if trimmed == "" {
+		trimmed = "Android Device"
+	}
+	return trimmed
 }
 
 // VPNMfaType 查询连接（vpn）场景可用的二次认证方式。

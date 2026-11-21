@@ -133,15 +133,44 @@ func (c *Client) SetServer(server string) error {
 	return nil
 }
 
+// UserAgent 返回本客户端对外使用的 User-Agent。
+//
+// 所有发往企业服务端/节点的请求都必须带上它：Go 的默认 UA
+// （Go-http-client/1.1）会直接把"这不是官方客户端"写在脸上。
+func (c *Client) UserAgent() string { return c.ua }
+
+// DefaultUserAgent 返回不依赖配置的官方 UA，供企业解析等裸请求使用。
+func DefaultUserAgent() string { return UserAgent(withMetaDefaults(Meta{})) }
+
 // Server 返回当前配置的服务端地址，未配置时返回空串。
 func (c *Client) Server() string {
 	return c.Base()
 }
 
 // UserAgent 按官方客户端格式拼出 User-Agent：
-// CorpLink/<version> (<brand><model>; Android <api>; <language>)
+//
+//	CorpLink/<version> (<brand><model>; Android <release>; <language>)
+//
+// 注意括号里是 Android 的 **release 版本号**（Build.VERSION.RELEASE，如 13），
+// 不是 SDK level（33）。query 里的 os_version 才是 SDK level，两者不能混用，
+// 混了等于自己举报"不是真机"。
 func UserAgent(m Meta) string {
-	return fmt.Sprintf("CorpLink/%s (%s%s; Android %s; %s)", m.AppVersion, m.Brand, m.Model, m.OSVersion, m.Language)
+	return fmt.Sprintf("CorpLink/%s (%s%s; Android %s; %s)", m.AppVersion, m.Brand, m.Model, AndroidRelease(m.OSVersion), m.Language)
+}
+
+// androidReleases 是 SDK level → Android release 的对照表（Build.VERSION.RELEASE）。
+var androidReleases = map[string]string{
+	"21": "5.0", "22": "5.1", "23": "6.0", "24": "7.0", "25": "7.1",
+	"26": "8.0", "27": "8.1", "28": "9", "29": "10", "30": "11",
+	"31": "12", "32": "12L", "33": "13", "34": "14", "35": "15", "36": "16",
+}
+
+// AndroidRelease 把 SDK level 翻成 UA 里用的 release 版本；未知值原样返回。
+func AndroidRelease(sdk string) string {
+	if release, ok := androidReleases[sdk]; ok {
+		return release
+	}
+	return sdk
 }
 
 // withMetaDefaults 为未显式指定的元信息补默认值，保证请求参数齐全。
@@ -161,10 +190,25 @@ func withMetaDefaults(m Meta) Meta {
 	if m.ClientSource == "" {
 		m.ClientSource = "FeiLian"
 	}
+	// 机型/品牌也要有默认值：MatchCompany 这类不经过配置的请求同样要伪装成
+	// 官方 Android 客户端，否则会漏出 Go 的默认 UA（Go-http-client/1.1）。
+	if m.Model == "" {
+		m.Model = "Pixel 7"
+	}
+	if m.Brand == "" {
+		m.Brand = "google"
+	}
+	// SDK level 与补丁日期也要有默认值：UA 里要有 "Android 13"，
+	// 空着会拼出 "Android ; zh" 这种一眼假的串。
+	if m.OSVersion == "" {
+		m.OSVersion = "33"
+	}
+	if m.OSPatch == "" {
+		m.OSPatch = "2023-07-05"
+	}
 	return m
 }
 
-// SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
 // GetRaw 以当前会话拉取一个原始资源（如图片），仅允许本企业域名。
 func (c *Client) GetRaw(ctx context.Context, target string) ([]byte, string, error) {
 	base := c.currentBase()
@@ -210,6 +254,7 @@ func (c *Client) HasSession() bool {
 	return false
 }
 
+// SetSigner 注册签名器；只有 Endpoint.SigningInputParams 非 0 的接口才会调用。
 func (c *Client) SetSigner(s Signer) {
 	c.mu.Lock()
 	c.signer = s
@@ -387,6 +432,17 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 
 	if c.verbose {
 		fmt.Printf("[req] %s %s\n", method, u.String())
+		// 只打印与鉴权相关的头，避免把 Cookie 原文刷进日志。
+		for _, name := range []string{"User-Agent", "sign", "jwt-token", "DPoP", "csrf-token"} {
+			if v := req.Header.Get(name); v != "" {
+				fmt.Printf("[hdr] %s=%s(len=%d)\n", name, truncate(v, 24), len(v))
+			} else if name == "jwt-token" {
+				fmt.Printf("[hdr] %s=<empty>\n", name)
+			}
+		}
+		if payload != nil {
+			fmt.Printf("[body] %s\n", truncate(string(payload), 300))
+		}
 	}
 
 	resp, err := c.http.Do(req)
@@ -424,13 +480,21 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, query url.Values, body any
 	}
 	// 业务体里带 timestamp 时优先用它（秒级整数，比 Date 头更贴近服务端逻辑时钟）。
 	syncFromPayload(env.Data)
-	// 只有"本来就带着会话"的请求才可能是被踢；登录链路上服务端也会回
-	// action=logout 之类的字段，误判会把登录流程直接打断。
-	if env.LoggedOut() && cookieValueOf(cookies, "session") != "" {
+	// 只有"本来就带着会话、且不是登录链路"的请求才可能是被踢。
+	// 登录链路必须整体豁免：重登时 jar 里往往还留着上一个会话的 session，
+	// 服务端在登录接口上回的 action=logout / 101 会被误判成"被踢"，把登录打断。
+	if !isLoginPath(ep.Path) && env.LoggedOut() && cookieValueOf(cookies, "session") != "" {
 		return nil, env.KickedError()
 	}
 	return env, nil
 }
+
+// timestampFloor / timestampCeil 限定可信的秒级时间戳范围（2001-09 ~ 2096-10）。
+// 服务端个别接口把毫秒当秒返回，直接用会把时钟偏移打到天文数字。
+const (
+	timestampFloor = 1_000_000_000
+	timestampCeil  = 4_000_000_000
+)
 
 // syncFromPayload 在响应 data 里找 timestamp 字段做校准。
 func syncFromPayload(data json.RawMessage) {
@@ -443,9 +507,24 @@ func syncFromPayload(data json.RawMessage) {
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return
 	}
-	if probe.Timestamp > 0 {
+	if probe.Timestamp >= timestampFloor && probe.Timestamp <= timestampCeil {
 		clock.SyncFromUnix(probe.Timestamp)
 	}
+}
+
+// isLoginPath 判断接口是否属于登录链路（这些接口不参与"被踢"判定）。
+func isLoginPath(path string) bool {
+	switch {
+	case strings.HasPrefix(path, "/api/tpslogin/"):
+		return true
+	case strings.HasPrefix(path, "/api/v1/login/"):
+		return true
+	case strings.HasPrefix(path, "/api/mfa/"):
+		return true
+	case path == EndpointLoginSetting.Path, path == EndpointOTP.Path:
+		return true
+	}
+	return false
 }
 
 // MatchCompany 用企业代码解析服务端地址。
@@ -459,6 +538,9 @@ func MatchCompany(ctx context.Context, code string) (*CompanyInfo, error) {
 		return nil, fmt.Errorf("构造企业解析请求: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// 企业解析也是发往公司侧域名的请求，UA 必须与客户端其余请求一致。
+	req.Header.Set("User-Agent", DefaultUserAgent())
+	req.Header.Set("Accept-Language", "zh-CN")
 	resp, err := (&http.Client{Timeout: requestTimeout}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("企业代码解析请求失败: %w", err)

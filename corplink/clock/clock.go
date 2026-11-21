@@ -23,6 +23,11 @@ var lastSync atomic.Int64
 // syncInterval 是校准的最小间隔：Date 头只有秒级精度，太频繁没有意义。
 const syncInterval = 10 * time.Minute
 
+// maxOffset 是可信的最大时钟偏移。超过这个量级说明时间源不可信
+// （例如把毫秒当秒、或中间有劫持/代理改了 Date），不能拿它去算
+// TOTP 与 DPoP 的 iat——那是"登录突然全挂"最隐蔽的来源。
+const maxOffset = 24 * time.Hour
+
 // Now 返回对齐后的当前时间。
 func Now() time.Time {
 	return time.Now().Add(Offset())
@@ -33,13 +38,16 @@ func Offset() time.Duration {
 	return time.Duration(offsetMS.Load()) * time.Millisecond
 }
 
-// SetOffset 直接设置偏移（从配置恢复时使用）。
+// SetOffset 直接设置偏移（从配置恢复时使用），超范围的值会被钳到 0。
 func SetOffset(d time.Duration) {
-	offsetMS.Store(int64(d / time.Millisecond))
+	SetOffsetMS(int64(d / time.Millisecond))
 }
 
 // SetOffsetMS 用毫秒数设置偏移（配置落盘用）。
 func SetOffsetMS(ms int64) {
+	if ms > int64(maxOffset/time.Millisecond) || ms < -int64(maxOffset/time.Millisecond) {
+		ms = 0
+	}
 	offsetMS.Store(ms)
 }
 
@@ -82,6 +90,9 @@ func SyncFromUnix(seconds int64) bool {
 // syncTo 记录偏移；小于 2 秒的差异不处理（Date 头本身只有秒级精度）。
 func syncTo(server time.Time) bool {
 	diff := time.Until(server) // 服务端时间 - 本机时间
+	if diff > maxOffset || diff < -maxOffset {
+		return false
+	}
 	if diff < 2*time.Second && diff > -2*time.Second {
 		lastSync.Store(time.Now().UnixNano())
 		return false

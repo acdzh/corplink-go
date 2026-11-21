@@ -74,8 +74,13 @@ const (
 	connAttempts = 3
 	// codeConnRetry 是官方唯一会重试的业务码（节点侧瞬时失败）。
 	codeConnRetry = 1010
-	// codeConnMFA 表示连接需要二次认证（VpnConfigModel 里由 3002 映射而来）。
+	// codeConnMFA 表示连接需要二次认证（长码）。
 	codeConnMFA = 20210002
+	// codeConnMFAShort 是同一个状态在节点侧的短码：官方 VpnConfigModel 把
+	// 3002 映射成"需要二次认证"，实测本租户返回的就是 3002。
+	codeConnMFAShort = 3002
+	// codeSessionInvalid 是节点认不出会话时的错误码（常见于设备从未上报）。
+	codeSessionInvalid = 3015
 	// handshakeFailLimit 是连续握手超时多少次后切换传输协议。
 	handshakeFailLimit = 2
 )
@@ -174,6 +179,8 @@ type Options struct {
 	OnKicked func(reason string)
 	// OnTunnelChange 在隧道建立/断开时回调（本地 DNS 用它清缓存）。
 	OnTunnelChange func()
+	// ReportDevice 在 /vpn/conn 回 3015 时补报设备信息（设备表里没有它）。
+	ReportDevice func(ctx context.Context) error
 	// Verbose 打开节点侧请求日志（/vpn/conn、/vpn/report）。
 	Verbose bool
 }
@@ -191,6 +198,7 @@ type Agent struct {
 	solveVPNMFA  func(ctx context.Context) error
 	onKickedFn   func(reason string)
 	onTunnelFn   func()
+	reportDevice func(ctx context.Context) error
 	verbose      bool
 
 	mu sync.RWMutex
@@ -255,6 +263,7 @@ func New(_ context.Context, cfg *config.Config, client *api.Client, opts Options
 		solveVPNMFA:    opts.SolveVPNMFA,
 		onKickedFn:     opts.OnKicked,
 		onTunnelFn:     opts.OnTunnelChange,
+		reportDevice:   opts.ReportDevice,
 		verbose:        opts.Verbose,
 		latencies:      map[string]int64{},
 		protoOverride:  map[string]int{},
@@ -855,6 +864,9 @@ func pingNode(ctx context.Context, node api.VpnInfo) int64 {
 	if err != nil {
 		return -1
 	}
+	// 测速请求同样走节点，必须带官方 UA，不能漏出 Go 默认 UA。
+	req.Header.Set("User-Agent", api.DefaultUserAgent())
+	req.Header.Set("Accept-Language", "zh-CN")
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1255,6 +1267,11 @@ func (a *Agent) SetSolveVPNMFA(fn func(ctx context.Context) error) {
 	a.solveVPNMFA = fn
 }
 
+// needsConnMFA 判断连接错误码是否表示"要先完成二次认证"。
+func needsConnMFA(code int) bool {
+	return code == codeConnMFA || code == codeConnMFAShort
+}
+
 // SetOnTunnelChange 注册隧道建立/断开的回调。
 func (a *Agent) SetOnTunnelChange(fn func()) {
 	a.onTunnelFn = fn
@@ -1499,13 +1516,23 @@ func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo, mode RouteMod
 	if err != nil {
 		return nil, err
 	}
-	if !env.OK() && env.Code == codeConnMFA {
+	if !env.OK() && needsConnMFA(env.Code) {
 		// 连接期二次认证：官方把请求挂起，等 MFA 完成后用同一个 body 续跑。
 		a.addEvent("info", "节点要求连接期二次认证，正在验证...")
 		if a.solveVPNMFA != nil {
 			if err := a.solveVPNMFA(ctx); err != nil {
 				a.addEvent("warn", "连接期二次认证失败: %v", err)
 			} else if retried, err := nodeClient.Do(ctx, api.EndpointVPNConn, nil, connBody); err == nil {
+				env = retried
+			}
+		}
+	}
+	if !env.OK() && env.Code == codeSessionInvalid {
+		// 3015 多半是这台设备从没上报过：服务端设备表里没有它，节点就认不出会话。
+		a.addEvent("info", "节点认为会话无效，补报一次设备信息后重试")
+		if a.reportDevice != nil && a.reportDevice(ctx) == nil {
+			nodeClient.SetCookies(a.client.Cookies())
+			if retried, err := nodeClient.Do(ctx, api.EndpointVPNConn, nil, connBody); err == nil {
 				env = retried
 			}
 		}
