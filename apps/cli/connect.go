@@ -117,12 +117,17 @@ func fetchNodes(ctx context.Context, client *api.Client) ([]api.VpnInfo, error) 
 	return nodes, nil
 }
 
-// pickNode 按名称选择节点，未指定时取第一个有余量的节点。
+// pickNode 按名称选择节点，未指定时取第一个普通节点（跳过专属节点）。
 func pickNode(nodes []api.VpnInfo, name string) (*api.VpnInfo, error) {
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("没有可用节点")
 	}
 	if name == "" {
+		for i := range nodes {
+			if !nodes[i].Dedicated {
+				return &nodes[i], nil
+			}
+		}
 		return &nodes[0], nil
 	}
 	for i := range nodes {

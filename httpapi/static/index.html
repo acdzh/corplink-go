@@ -1012,10 +1012,16 @@ async function api(path, opts) {
 }
 
 function sortedNodes() {
+  // 专属节点固定排在最后：延迟排序只在普通节点之间生效。
+  const rank = (n) => (n.dedicated ? 1 : 0);
   if (!Object.keys(latency).length) {
-    return nodes;
+    return [...nodes].sort((a, b) => rank(a) - rank(b));
   }
   return [...nodes].sort((a, b) => {
+    const dr = rank(a) - rank(b);
+    if (dr !== 0) {
+      return dr;
+    }
     const la = latency[a.name];
     const lb = latency[b.name];
     const va = la === undefined || la < 0 ? Number.MAX_SAFE_INTEGER : la;
@@ -1076,7 +1082,12 @@ function renderTagPills() {
 function renderNodes() {
   renderTagPills();
   const list = sortedNodes();
-  const autoMs = Object.values(latency).filter((v) => v >= 0).sort((a, b) => a - b)[0];
+  // 自动选择只在普通节点之间比速度，专属节点不参与自动选路。
+  const autoMs = list
+    .filter((n) => !n.dedicated)
+    .map((n) => latency[n.name])
+    .filter((v) => v !== undefined && v >= 0)
+    .sort((a, b) => a - b)[0];
   const sel = $('nodeSelect');
   sel.innerHTML = '<option value="auto">🚀 自动选择（最快节点' + (autoMs !== undefined ? ' · ' + autoMs + 'ms' : '') + '）</option>'
     + list.map((n) => {
@@ -1099,7 +1110,7 @@ function renderNodes() {
     if (!kw) {
       return true;
     }
-    const hay = [n.name, n.raw_name, n.ip, n.internal_ip, n.tag, n.type].join(' ').toLowerCase();
+    const hay = [n.name, n.raw_name, n.ip, n.internal_ip, n.tag, n.type, n.dedicated ? '专属 dedicated' : ''].join(' ').toLowerCase();
     return hay.includes(kw);
   });
 
@@ -1131,7 +1142,7 @@ function renderNodes() {
     const ms = latency[n.name];
     const lv = latencyView(ms);
     const isCurrent = connectedNode === n.name;
-    const chips = [n.tag, n.type].filter(Boolean).map((c) => '<span class="badge">' + esc(c) + '</span>').join(' ');
+    const chips = [n.dedicated ? '专属' : '', n.tag, n.type].filter(Boolean).map((c) => '<span class="badge">' + esc(c) + '</span>').join(' ');
     const proto = n.protocol_mode === 1 ? 'TCP' : 'UDP';
     const ipText = n.internal_ip || n.ip || '-';
     html += '<tr class="' + (isCurrent ? 'active-row' : '') + '">'

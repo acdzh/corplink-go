@@ -540,10 +540,13 @@ func main() {
 
 					ui.TextInput(c, &st.search).FillWidth().Placeholder("搜索节点名称、标签或 IP...")
 
-					// 按延迟排序节点，便于快速挑选最优节点。
+					// 按延迟排序节点，便于快速挑选最优节点；专属节点固定排在最后。
 					sorted := make([]corplink.Node, len(nodes))
 					copy(sorted, nodes)
 					sort.SliceStable(sorted, func(i, j int) bool {
+						if sorted[i].Dedicated != sorted[j].Dedicated {
+							return !sorted[i].Dedicated
+						}
 						ni := sorted[i].Name
 						nj := sorted[j].Name
 						li, okI := latencies[ni]
@@ -559,9 +562,14 @@ func main() {
 						return vi < vj
 					})
 
+					// 自动选择只在普通节点之间比速度，专属节点不参与自动选路。
 					var bestAutoMs int64 = -1
-					for _, ms := range latencies {
-						if ms >= 0 && (bestAutoMs < 0 || ms < bestAutoMs) {
+					for _, n := range sorted {
+						if n.Dedicated {
+							continue
+						}
+						ms, ok := latencies[n.Name]
+						if ok && ms >= 0 && (bestAutoMs < 0 || ms < bestAutoMs) {
 							bestAutoMs = ms
 						}
 					}
@@ -636,7 +644,14 @@ func main() {
 									latCol = latencyColor(p, ms)
 								}
 								node := name
-								row(name, mark(st.selected == node, node), n.Tag, protoName(n.ProtocolMode),
+								tagText := n.Tag
+								if n.Dedicated {
+									tagText = "专属"
+									if n.Tag != "" {
+										tagText = "专属 · " + n.Tag
+									}
+								}
+								row(name, mark(st.selected == node, node), tagText, protoName(n.ProtocolMode),
 									lat, latCol, st.iconOf(node),
 									st.selected == node, state.Connected && state.Node == node,
 									func() { st.selected = node },

@@ -48,8 +48,12 @@ func runList(args []string) error {
 	}
 	fmt.Printf("共 %d 个节点\n", len(nodes))
 	for _, n := range nodes {
-		fmt.Printf("  %-14s %-16s vpn_port=%-5d api_port=%-5d protocol=%d\n",
-			n.EnName, n.IP, n.VPNPort, n.APIPort, n.ProtocolMode)
+		kind := ""
+		if n.Dedicated {
+			kind = "[专属]"
+		}
+		fmt.Printf("  %-14s %-16s vpn_port=%-5d api_port=%-5d protocol=%d%s\n",
+			n.EnName, n.IP, n.VPNPort, n.APIPort, n.ProtocolMode, kind)
 	}
 	return nil
 }

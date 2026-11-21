@@ -352,6 +352,8 @@ type Node struct {
 	VPNPort int `json:"vpn_port"`
 	// BackupIPs 是节点的备用地址，用于订阅里的直连规则。
 	BackupIPs []string `json:"backup_ips,omitempty"`
+	// Dedicated 表示节点是专属节点：不参与自动选路，列表中排在最后。
+	Dedicated bool `json:"dedicated"`
 }
 
 // Nodes 返回当前节点列表的对外视图。
@@ -372,6 +374,7 @@ func (c *Client) Nodes() []Node {
 			APIPort:      n.APIPort,
 			VPNPort:      n.VPNPort,
 			BackupIPs:    n.BackupIPs,
+			Dedicated:    n.Dedicated,
 		})
 	}
 	return out

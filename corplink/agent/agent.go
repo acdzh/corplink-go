@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,6 +181,11 @@ func (a *Agent) RefreshNodes(ctx context.Context) error {
 	if err := json.Unmarshal(env.Data, &nodes); err != nil {
 		return recordErr(err)
 	}
+	// 专属节点排在最后：官方客户端把 dedicated 节点单独拎到列表末尾，
+	// 这里在入库时定序，CLI / 面板 / 桌面端拿到的顺序保持一致。
+	sort.SliceStable(nodes, func(i, j int) bool {
+		return !nodes[i].Dedicated && nodes[j].Dedicated
+	})
 	a.mu.Lock()
 	a.nodes = nodes
 	a.lastErr = nil
@@ -507,7 +513,9 @@ func (a *Agent) PollLatency(ctx context.Context, interval time.Duration) {
 }
 
 // PingAll 用官方客户端的测速接口（GET https://{ip}:{api_port}/vpn/ping）
-// 并发测所有节点，返回节点名到往返耗时的映射，失败为 -1。
+// 并发测所有普通节点，返回节点名到往返耗时的映射，失败为 -1。
+// 专属节点不参与批量测速：官方客户端同样跳过 dedicated 节点，
+// 只在用户手动点测速时单独请求。
 func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
 	nodes := a.Nodes()
 	out := make(map[string]int64, len(nodes))
@@ -520,6 +528,9 @@ func (a *Agent) PingAll(ctx context.Context) map[string]int64 {
 	var wg sync.WaitGroup
 	for _, node := range nodes {
 		node := node
+		if node.Dedicated {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -636,20 +647,32 @@ func (a *Agent) Auto() bool {
 	return a.auto
 }
 
-// fastest 返回测速最快的节点名。
+// fastest 返回测速最快、且允许自动选路的节点名。
 func (a *Agent) fastest(ctx context.Context) (string, bool) {
-	latencies := a.PingAll(ctx)
+	best, _ := bestNode(a.Nodes(), a.PingAll(ctx))
+	return best, best != ""
+}
+
+// bestNode 在允许自动选路的节点里挑延迟最低的一个，返回节点名与延迟。
+//
+// 专属节点（dedicated）由服务端保留给特定账号，官方客户端的自动选路组
+// 不含这些节点，这里同样跳过；全部节点都是专属节点时宁可返回空。
+func bestNode(nodes []api.VpnInfo, latencies map[string]int64) (string, int64) {
 	best := ""
 	var bestMs int64 = -1
-	for name, ms := range latencies {
-		if ms < 0 {
+	for _, node := range nodes {
+		if node.Dedicated {
+			continue
+		}
+		ms, ok := latencies[nodeName(node)]
+		if !ok || ms < 0 {
 			continue
 		}
 		if bestMs < 0 || ms < bestMs {
-			best, bestMs = name, ms
+			best, bestMs = nodeName(node), ms
 		}
 	}
-	return best, best != ""
+	return best, bestMs
 }
 
 // pingTarget 返回用于测速的地址：主 IP 不通时依次尝试 backup_ips。
@@ -698,16 +721,7 @@ func (a *Agent) autoRound(ctx context.Context) {
 		return
 	}
 	latencies := a.PingAll(ctx)
-	best := ""
-	var bestMs int64 = -1
-	for name, ms := range latencies {
-		if ms < 0 {
-			continue
-		}
-		if bestMs < 0 || ms < bestMs {
-			best, bestMs = name, ms
-		}
-	}
+	best, bestMs := bestNode(a.Nodes(), latencies)
 	if best == "" {
 		return
 	}

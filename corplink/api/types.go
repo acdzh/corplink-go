@@ -120,6 +120,9 @@ type VpnInfo struct {
 	VPNPort      int      `json:"vpn_port"`
 	ProtocolMode int      `json:"protocol_mode"`
 	Timeout      int      `json:"timeout"`
+	// Dedicated 表示服务端把节点标为专属节点：只授权给特定人群使用，
+	// 官方客户端把它排在列表最后，自动选路也不会连它。
+	Dedicated bool `json:"dedicated"`
 }
 
 // WgSetting 是隧道附加配置。
