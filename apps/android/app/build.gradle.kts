@@ -4,13 +4,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// 版本号跟发版流水线一致：默认 0.0.0，CI 传 -PcorplinkVersion=2026.11.21。
-// versionCode 必须单调递增，用日期拼数字（2026.11.21 → 20261121，同一天第二次 → 202611212）。
+// 版本号跟发版流水线一致：默认 0.0.0，CI 传 -PcorplinkVersion=2026.11.22-3。
+// versionCode 必须单调递增，直接取版本号里的全部数字：
+// 2026.11.22 → 20261122，同日第二次 2026.11.22-3 → 202611223（仍在 int32 范围内）。
 val corplinkVersion = (findProperty("corplinkVersion") as String?) ?: "0.0.0"
 val corplinkVersionCode = corplinkVersion
-    .split(".")
-    .mapNotNull { it.toIntOrNull() }
-    .joinToString("")
+    .filter { it.isDigit() }
     .toIntOrNull()
     ?.coerceAtLeast(1)
     ?: 1

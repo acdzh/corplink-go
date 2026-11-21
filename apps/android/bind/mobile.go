@@ -254,21 +254,33 @@ type planJSON struct {
 	Node string `json:"node"`
 	// Addresses 是本端隧道地址（不带掩码）。
 	Addresses []string `json:"addresses"`
-	// Routes 是需要走隧道的网段。
+	// Routes 是按模式选中的网段。
 	Routes []string `json:"routes"`
+	// RoutesFull 是全局模式的网段。
+	RoutesFull []string `json:"routes_full"`
+	// RoutesSplit 是分流模式的网段。
+	RoutesSplit []string `json:"routes_split"`
 	// DNS 是隧道内 DNS。
 	DNS []string `json:"dns"`
 	// MTU 是隧道 MTU。
 	MTU int `json:"mtu"`
+	// Mode 是本次使用的模式：full 或 split。
+	Mode string `json:"mode"`
 }
 
 // Plan 向节点申请隧道参数并缓存，返回 JSON；Kotlin 据此调用 VpnService.Builder。
-func Plan(node string) (string, error) {
+//
+// full 为真走全局（全量路由），为假走分流（只走内网网段）。
+func Plan(node string, full bool) (string, error) {
 	c := get()
 	if c == nil {
 		return "", errNotStarted
 	}
-	p, err := c.Prepare(context.Background(), node)
+	mode := corplink.RouteSplit
+	if full {
+		mode = corplink.RouteFull
+	}
+	p, err := c.Prepare(context.Background(), node, mode)
 	if err != nil {
 		return "", err
 	}
@@ -276,13 +288,44 @@ func Plan(node string) (string, error) {
 	pending = p
 	mu.Unlock()
 	out := planJSON{
-		Node:      p.Node(),
-		Addresses: p.Addresses(),
-		Routes:    p.Routes(),
-		DNS:       p.DNS(),
-		MTU:       p.MTU(),
+		Node:        p.Node(),
+		Addresses:   p.Addresses(),
+		Routes:      p.Routes(),
+		RoutesFull:  p.RoutesFull(),
+		RoutesSplit: p.RoutesSplit(),
+		DNS:         p.DNS(),
+		MTU:         p.MTU(),
+		Mode:        string(p.Mode()),
 	}
 	return encode(out), nil
+}
+
+// StartProxy 在 addr 上启动本地混合代理（SOCKS5 + HTTP），Android 用来给其它 App 用。
+func StartProxy(addr string) error {
+	c := get()
+	if c == nil {
+		return errNotStarted
+	}
+	return c.StartProxy(addr)
+}
+
+// StopProxy 关闭本地混合代理。
+func StopProxy() error {
+	c := get()
+	if c == nil {
+		return errNotStarted
+	}
+	c.StopProxy()
+	return nil
+}
+
+// ProxyAddr 返回当前代理监听地址，未启动时为空。
+func ProxyAddr() string {
+	c := get()
+	if c == nil {
+		return ""
+	}
+	return c.ProxyAddr()
 }
 
 // Establish 用 VpnService 的 fd 建网卡并接入 Plan 缓存的隧道参数。

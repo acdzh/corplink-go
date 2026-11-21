@@ -194,7 +194,7 @@ checksums.txt
 | CLI `apps/cli` | 全平台 | darwin/linux/windows amd64+arm64，另验过 linux/armv7 |
 | 桌面 `apps/desktop` | macOS / Windows / Linux | 纯 Go（mygo 用 purego 调系统 API）；Linux 需 GTK3 系统库 |
 | Docker | linux/amd64 + linux/arm64 | buildx 多架构，镜像内跑 CLI + 面板 |
-| Android `apps/android` | Go 侧就绪 | 4 个 ABI 的 bind 层编译通过；APK 需要 SDK/NDK 与 gomobile |
+| Android `apps/android` | 可用 | Compose 界面 + VpnService；支持全局/分流切换与本地代理；发版流水线出四 ABI 的 APK |
 | iOS | 未做 | 库已与平台解耦，后续接 c-archive 即可 |
 
 ## 开发
@@ -228,7 +228,7 @@ corplink/config          配置与设备标识
 httpapi                  JSON API + 控制面板页面
 apps/cli                 CLI 与服务入口
 apps/desktop             MyGo 原生桌面端
-apps/android             Android 端（gomobile 门面 + VpnService + Compose）
+apps/android             Android 端（gomobile 门面 + VpnService + Compose，含全局/分流与本地代理）
 ```
 
 库不含任何监听与序列化：`httpapi` 才提供 HTTP 契约，端侧按需启动。

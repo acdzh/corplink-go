@@ -84,6 +84,16 @@ type State struct {
 	Tag string `json:"tag"`
 }
 
+// RouteMode 是隧道分流模式。
+type RouteMode string
+
+const (
+	// RouteFull 把服务端下发的全量路由送进隧道（全局）。
+	RouteFull RouteMode = "full"
+	// RouteSplit 只把内网网段送进隧道（分流）。
+	RouteSplit RouteMode = "split"
+)
+
 // TUNProvider 提供隧道使用的网卡；为空时使用内置 netstack 网卡。
 type TUNProvider interface {
 	// TUN 按隧道参数返回网卡，返回的网卡交给 wireguard-go 托管。
@@ -309,7 +319,7 @@ func (a *Agent) connectNode(ctx context.Context, name string) error {
 	a.addEvent("info", "正在连接节点 %s...", target)
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	plan, err := a.prepareNode(connCtx, node)
+	plan, err := a.prepareNode(connCtx, node, RouteFull)
 	if err != nil {
 		a.mu.Lock()
 		a.lastErr = err
@@ -762,13 +772,28 @@ type Plan struct {
 	protocol string
 	// target 是节点展示名。
 	target string
+	// routesFull 是服务端下发的全量路由。
+	routesFull []string
+	// routesSplit 是服务端下发的分流路由。
+	routesSplit []string
+	// mode 是本次建隧道使用的分流模式。
+	mode RouteMode
 }
 
 // Addresses 返回本端隧道地址（不带掩码）。
 func (p *Plan) Addresses() []string { return p.cfg.Addresses }
 
-// Routes 返回需要走隧道的网段。
+// Routes 返回按当前模式选中的网段。
 func (p *Plan) Routes() []string { return p.cfg.AllowedIPs }
+
+// RoutesFull 返回全量路由（全局模式用）。
+func (p *Plan) RoutesFull() []string { return p.routesFull }
+
+// RoutesSplit 返回分流路由（分流模式用）。
+func (p *Plan) RoutesSplit() []string { return p.routesSplit }
+
+// Mode 返回本次建隧道使用的分流模式。
+func (p *Plan) Mode() RouteMode { return p.mode }
 
 // DNS 返回隧道内 DNS。
 func (p *Plan) DNS() []string { return p.cfg.DNS }
@@ -782,16 +807,16 @@ func (p *Plan) Node() string { return p.target }
 // Prepare 向节点申请隧道配置并生成参数，但不建立隧道。
 //
 // Android 等需要先创建系统网卡的端侧走这条路径：拿 Plan 建好网卡后交回 Establish。
-func (a *Agent) Prepare(ctx context.Context, name string) (*Plan, error) {
+func (a *Agent) Prepare(ctx context.Context, name string, mode RouteMode) (*Plan, error) {
 	node, err := a.pick(name)
 	if err != nil {
 		return nil, err
 	}
-	return a.prepareNode(ctx, node)
+	return a.prepareNode(ctx, node, mode)
 }
 
 // prepareNode 用已选定的节点申请隧道参数。
-func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo) (*Plan, error) {
+func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo, mode RouteMode) (*Plan, error) {
 	nodeClient, err := api.New(api.Options{
 		Server:             fmt.Sprintf("https://%s:%d", node.IP, node.APIPort),
 		DeviceID:           a.cfg.DeviceID,
@@ -840,11 +865,22 @@ func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo) (*Plan, error
 		protocolName = "TCP"
 	}
 	mtu := int(info.Setting.VpnMTU)
-	// 数据面固定用服务端下发的全量路由：我们只负责提供代理，
-	// 哪些流量进代理由 Clash 等使用方通过规则决定。
-	allowed := info.Setting.VpnRouteFull
-	if len(allowed) == 0 {
-		allowed = info.Setting.VpnRouteSplit
+	// 两套路由都由服务端下发：全局用全量，分流只走内网网段。
+	// 任一为空时回落到另一套，避免服务端只下发一份时隧道没有路由。
+	routesFull := info.Setting.VpnRouteFull
+	routesSplit := info.Setting.VpnRouteSplit
+	if len(routesFull) == 0 {
+		routesFull = routesSplit
+	}
+	if len(routesSplit) == 0 {
+		routesSplit = routesFull
+	}
+	if mode != RouteSplit {
+		mode = RouteFull
+	}
+	allowed := routesFull
+	if mode == RouteSplit {
+		allowed = routesSplit
 	}
 	tunnelCfg := tunnel.Config{
 		PrivateKey: pair.PrivateKey,
@@ -861,13 +897,16 @@ func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo) (*Plan, error
 		mtu = 1420
 	}
 	return &Plan{
-		node:     node,
-		cfg:      tunnelCfg,
-		dns:      dns,
-		domains:  info.Setting.VpnDNSDomain,
-		mtu:      mtu,
-		protocol: protocolName,
-		target:   nodeName(node),
+		node:        node,
+		cfg:         tunnelCfg,
+		dns:         dns,
+		domains:     info.Setting.VpnDNSDomain,
+		mtu:         mtu,
+		protocol:    protocolName,
+		target:      nodeName(node),
+		routesFull:  routesFull,
+		routesSplit: routesSplit,
+		mode:        mode,
 	}, nil
 }
 

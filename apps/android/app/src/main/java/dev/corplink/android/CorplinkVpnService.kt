@@ -21,6 +21,8 @@ class CorplinkVpnService : VpnService() {
         const val ACTION_DISCONNECT = "dev.corplink.android.action.DISCONNECT"
         // EXTRA_NODE 是节点展示名。
         const val EXTRA_NODE = "node"
+        // EXTRA_FULL 为真时走全局模式（全量路由），否则只走内网网段。
+        const val EXTRA_FULL = "full"
         // CHANNEL_ID 是前台服务通知渠道。
         private const val CHANNEL_ID = "corplink-tunnel"
         // NOTIFICATION_ID 是前台服务通知 id。
@@ -35,7 +37,8 @@ class CorplinkVpnService : VpnService() {
             ACTION_CONNECT -> {
                 startForeground(NOTIFICATION_ID, buildNotification())
                 val node = intent.getStringExtra(EXTRA_NODE).orEmpty()
-                runCatching { connect(node) }.onFailure {
+                val full = intent.getBooleanExtra(EXTRA_FULL, false)
+                runCatching { connect(node, full) }.onFailure {
                     Mobile.disconnect()
                     closeTunnel()
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -60,11 +63,11 @@ class CorplinkVpnService : VpnService() {
     }
 
     // connect 按 Plan 建网卡，把 fd 交给库。
-    private fun connect(node: String) {
+    private fun connect(node: String, full: Boolean) {
         if (tunnel != null) {
             return
         }
-        val plan = Bridge.plan(node)
+        val plan = Bridge.plan(node, full)
         val builder = Builder()
             .setSession(getString(R.string.app_name))
             .setMtu(plan.mtu)
@@ -76,7 +79,8 @@ class CorplinkVpnService : VpnService() {
         plan.dns.forEach { builder.addDnsServer(it) }
         val pfd = builder.establish() ?: error("establish 失败：未授权或已有其它 VPN")
         tunnel = pfd
-        Mobile.establish(pfd.fd)
+        // gomobile 把 Go 的 int 绑成 long。
+        Mobile.establish(pfd.fd.toLong())
     }
 
     // closeTunnel 关闭系统网卡，忽略库已关闭同一 fd 的情况。
@@ -105,7 +109,7 @@ class CorplinkVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
-            .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
+            .setSmallIcon(R.drawable.ic_stat_vpn)
             .setContentIntent(open)
             .setOngoing(true)
             .build()

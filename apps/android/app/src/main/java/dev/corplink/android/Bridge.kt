@@ -28,12 +28,17 @@ data class StatusInfo(
 )
 
 // VpnPlan 是 VpnService.Builder 建网卡需要的参数。
+//
+// routes 已经按模式选好；routesFull / routesSplit 是两套原样路由，方便界面展示。
 data class VpnPlan(
     val node: String = "",
     val addresses: List<String> = emptyList(),
     val routes: List<String> = emptyList(),
+    val routesFull: List<String> = emptyList(),
+    val routesSplit: List<String> = emptyList(),
     val dns: List<String> = emptyList(),
     val mtu: Int = 1420,
+    val mode: String = "full",
 )
 
 // Bridge 把库返回的 JSON 翻译成数据类，界面不直接解析 JSON。
@@ -76,15 +81,18 @@ object Bridge {
         return out
     }
 
-    // plan 申请隧道参数，供 VpnService 建网卡。
-    fun plan(node: String): VpnPlan {
-        val json = JSONObject(Mobile.plan(node))
+    // plan 申请隧道参数，供 VpnService 建网卡；full 为真走全局，否则只走内网。
+    fun plan(node: String, full: Boolean): VpnPlan {
+        val json = JSONObject(Mobile.plan(node, full))
         return VpnPlan(
             node = json.optString("node"),
             addresses = json.optJSONArray("addresses").toStringList(),
             routes = json.optJSONArray("routes").toStringList(),
+            routesFull = json.optJSONArray("routes_full").toStringList(),
+            routesSplit = json.optJSONArray("routes_split").toStringList(),
             dns = json.optJSONArray("dns").toStringList(),
             mtu = json.optInt("mtu", 1420),
+            mode = json.optString("mode", "full"),
         )
     }
 
@@ -111,6 +119,20 @@ object Bridge {
         JSONObject(Mobile.loginMFA(code))
         return "登录成功"
     }
+
+    // startProxy 在 addr 上开本地混合代理。
+    fun startProxy(addr: String): String {
+        Mobile.startProxy(addr)
+        return Mobile.proxyAddr()
+    }
+
+    // stopProxy 关掉本地混合代理。
+    fun stopProxy() {
+        Mobile.stopProxy()
+    }
+
+    // proxyAddr 返回当前代理监听地址，未启动时为空。
+    fun proxyAddr(): String = runCatching { Mobile.proxyAddr() }.getOrDefault("")
 }
 
 // toStringList 把 JSON 数组转成字符串列表，忽略空值。

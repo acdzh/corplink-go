@@ -54,6 +54,17 @@ type (
 	Plan = agent.Plan
 )
 
+// 分流模式：全局把全量路由送进隧道，分流只走内网网段。
+const (
+	// RouteFull 是全局模式。
+	RouteFull = agent.RouteFull
+	// RouteSplit 是分流模式。
+	RouteSplit = agent.RouteSplit
+)
+
+// RouteMode 是隧道分流模式。
+type RouteMode = agent.RouteMode
+
 // TUNProvider 提供隧道使用的网卡；为空时使用内置 netstack 用户态网卡。
 type TUNProvider interface {
 	// TUN 按隧道参数返回网卡，返回的网卡交给 wireguard-go 托管。
@@ -97,6 +108,8 @@ type Client struct {
 	proxyLn net.Listener
 	// cancel 停止后台循环。
 	cancel context.CancelFunc
+	// runCtx 是 Start 建立的后台循环上下文，代理日志用它判断是否已停止。
+	runCtx context.Context
 }
 
 // New 加载配置、恢复会话并装配客户端。
@@ -174,6 +187,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
+	c.runCtx = runCtx
 
 	// 拉取一次节点列表：失败（未登录、会话过期）只记事件，不阻塞后续。
 	if err := c.agent.RefreshNodes(runCtx); err != nil {
@@ -213,19 +227,41 @@ func (c *Client) Start(ctx context.Context) error {
 	if proxyListen == "" {
 		return nil
 	}
-	proxyLn, err := net.Listen("tcp", proxyListen)
-	if err != nil {
+	if err := c.StartProxy(proxyListen); err != nil {
 		cancel()
-		return fmt.Errorf("监听代理端口 %s: %w", proxyListen, err)
+		return err
 	}
-	c.proxyLn = proxyLn
-	c.proxyAddr = proxyLn.Addr().String()
+	return nil
+}
+
+// StartProxy 在 addr 上启动混合代理；已在运行时先关掉旧的。
+func (c *Client) StartProxy(addr string) error {
+	if addr == "" {
+		return fmt.Errorf("缺少代理监听地址")
+	}
+	c.StopProxy()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("监听代理端口 %s: %w", addr, err)
+	}
+	c.proxyLn = ln
+	c.proxyAddr = ln.Addr().String()
+	runCtx := c.runCtx
 	go func() {
-		if err := proxy.New(c.agent).Serve(proxyLn); err != nil && runCtx.Err() == nil {
+		if err := proxy.New(c.agent).Serve(ln); err != nil && (runCtx == nil || runCtx.Err() == nil) {
 			c.log.Warn("代理服务退出", "err", err)
 		}
 	}()
 	return nil
+}
+
+// StopProxy 关闭混合代理。
+func (c *Client) StopProxy() {
+	if c.proxyLn != nil {
+		_ = c.proxyLn.Close()
+		c.proxyLn = nil
+	}
+	c.proxyAddr = ""
 }
 
 // Close 断开隧道并停止后台循环与代理监听。
@@ -234,9 +270,7 @@ func (c *Client) Close(_ context.Context) error {
 		return nil
 	}
 	c.agent.Disconnect()
-	if c.proxyLn != nil {
-		_ = c.proxyLn.Close()
-	}
+	c.StopProxy()
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -393,9 +427,10 @@ func (c *Client) Disconnect() { c.agent.Disconnect() }
 
 // Prepare 返回指定节点的隧道参数（地址、路由、DNS、MTU），不建立隧道。
 //
-// Android 先按它创建系统网卡，再把网卡描述符交给 Establish。
-func (c *Client) Prepare(ctx context.Context, name string) (*Plan, error) {
-	return c.agent.Prepare(ctx, name)
+// Android 先按它创建系统网卡，再把网卡描述符交给 Establish；
+// mode 传 RouteSplit 只把内网网段送进隧道，传 RouteFull 走全量路由。
+func (c *Client) Prepare(ctx context.Context, name string, mode RouteMode) (*Plan, error) {
+	return c.agent.Prepare(ctx, name, mode)
 }
 
 // Establish 用文件描述符创建网卡并接入 plan 描述的隧道。

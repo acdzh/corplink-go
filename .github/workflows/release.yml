@@ -94,3 +94,62 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ needs.version.outputs.version }}
+  android:
+    name: Android APK
+    needs: [version, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: 安装 SDK 组件与 NDK
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - name: 准备 gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+      - name: 生成 AAR
+        run: gomobile bind -target=android -androidapi 24 -o apps/android/app/libs/corplink.aar ./apps/android/bind
+      - name: 构建 APK
+        working-directory: apps/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug -PcorplinkVersion=${{ needs.version.outputs.version }}
+      - name: 附加到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="corplink-go_${{ needs.version.outputs.version }}_android.apk"
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk "$name"
+          gh release upload "v${{ needs.version.outputs.version }}" "$name" --clobber
+
+  desktop-app:
+    name: 桌面端 .app
+    needs: [version, binaries]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: 构建并打包 .app
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o corplink-desktop ./apps/desktop
+          VERSION=${{ needs.version.outputs.version }} scripts/macos-app.sh corplink-desktop "Corplink Go.app"
+          ditto -c -k --sequesterRsrc --keepParent "Corplink Go.app" "corplink-go-desktop_${{ needs.version.outputs.version }}_darwin_app.zip"
+      - name: 附加到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          zip="corplink-go-desktop_${{ needs.version.outputs.version }}_darwin_app.zip"
+          gh release upload "v${{ needs.version.outputs.version }}" "$zip" --clobber
