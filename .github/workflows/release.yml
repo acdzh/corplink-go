@@ -1,6 +1,9 @@
 name: release
 
 on:
+  # 手动点一下发版：版本号按日期自动生成，不用手写。
+  workflow_dispatch:
+  # 也可以自己打 tag 触发（v2026.11.21 这种）。
   push:
     tags: ['v*']
 
@@ -9,7 +12,40 @@ permissions:
   packages: write
 
 jobs:
+  version:
+    name: 计算版本（日期）
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: ver
+        name: 生成日期 tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/}"
+            echo "使用已有 tag：$v"
+          else
+            base=$(TZ=Asia/Shanghai date +%Y.%m.%d)
+            v="v$base"
+            n=1
+            while git ls-remote --exit-code --tags origin "$v" >/dev/null 2>&1; do
+              n=$((n+1))
+              v="v$base.$n"
+            done
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$v"
+            git push origin "$v"
+            echo "新建 tag：$v"
+          fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+
   binaries:
+    name: 打包并发布
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +53,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+      - name: 拉取刚创建的 tag
+        run: git fetch --force --tags
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
@@ -26,6 +64,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
+    name: 镜像（amd64 + arm64）
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,13 +76,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
+      - id: meta
+        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/corplink-go
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.version.outputs.version }}
             type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
@@ -52,4 +91,4 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ needs.version.outputs.version }}

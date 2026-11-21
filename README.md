@@ -115,21 +115,97 @@ docker run -d --name corp-link \
 
 或使用 `docker compose up -d`。
 
+多架构构建（linux/amd64 + linux/arm64，需要 buildx）：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t corplink-go . --load
+```
+
+Dockerfile 用 `--platform=$BUILDPLATFORM` 编译、按 `TARGETOS/TARGETARCH` 交叉出二进制，
+运行时是 distroless（无 shell、非 root），数据目录挂 `/data`。
+
+容器怎么跑：
+
+```
+ENTRYPOINT corplink
+CMD      serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:13140
+```
+
+也就是容器内跑的就是 CLI 的 `serve`：混合代理在 3710，面板在 13140，状态落在 `/data`
+（`config.json` + `session.json`）。面板默认监听 `0.0.0.0`，**记得用 `-panel-token` 固定令牌**，
+否则每次重启都会换一个：
+
+```bash
+docker run -d --name corp-link \
+  -p 3710:3710 -p 13140:13140 \
+  -v "$PWD/data:/data" \
+  corplink-go:latest \
+  serve -config /data/config.json -proxy 0.0.0.0:3710 -panel 0.0.0.0:13140 -panel-token 你的令牌
+```
+
+> 本机实测：Docker Hub 直连不可达，daemon 的 `registry-mirrors` 指向 `mirrors.byted.org`
+> 又解析不了（NXDOMAIN）。镜像改成 daocloud / dockerproxy.net 才能拉得动。
+> 原配置备份在 `~/.docker/daemon.json.bak-*`。
+
 ## 桌面版
 
 ```bash
-go build -o corplink-desktop ./apps/desktop
+CGO_ENABLED=0 go build -o corplink-desktop ./apps/desktop
 ./corplink-desktop
 ```
 
-macOS 原生窗口（节点、流量、令牌、设置、日志）+ 菜单栏常驻托盘，内部运行同一套核心运行时，Web 控制面板照常可用。
-点击菜单栏图标可快速切换节点直连、查看并一键复制当前 TOTP 动态码、复制代理地址或订阅链接。
+原生窗口（节点、流量、令牌、设置、日志）+ 托盘状态图标，内部运行同一套核心运行时，Web 控制面板照常可用。
+
+| 平台 | 状态 | 说明 |
+| --- | --- | --- |
+| macOS 11+ | 支持 | 菜单栏托盘，发布产物是二进制；用 `scripts/macos-app.sh` 包成 .app |
+| Windows 10+ | 支持 | 发布产物是 GUI 子系统（`-H=windowsgui`），双击不弹控制台；未签名会被 SmartScreen 拦 |
+| Linux | 需系统库 | 运行时 dlopen GTK3 栈，缺库直接起不来，见下 |
+
+Linux 依赖（Debian/Ubuntu）：
+
+```bash
+sudo apt install libgtk-3-0 libgtk-layer-shell0 libayatana-appindicator3-1 \
+  libcairo2 libharfbuzz0b libepoxy0 libfontconfig1 libglib2.0-0
+# 托盘图标另外需要 libayatana-appindicator3 或 libappindicator3
+```
+
+macOS 打成 .app：
+
+```bash
+VERSION=$(git describe --tags --always) scripts/macos-app.sh corplink-desktop "Corplink Go.app"
+open "Corplink Go.app"
+```
+
+发布产物命名（goreleaser）：
+
+```
+corplink-go_<version>_<os>_<arch>.tar.gz            CLI
+corplink-go-desktop_<version>_<os>_<arch>.tar.gz    桌面端（Windows 为 .zip）
+checksums.txt
+```
+
+## 平台支持
+
+| 目标 | 状态 | 说明 |
+| --- | --- | --- |
+| 库 `corplink/` | 全平台 | 纯 Go，无 cgo；darwin/linux/windows 的 amd64+arm64 与 android 各 ABI 均编译通过 |
+| CLI `apps/cli` | 全平台 | darwin/linux/windows amd64+arm64，另验过 linux/armv7 |
+| 桌面 `apps/desktop` | macOS / Windows / Linux | 纯 Go（mygo 用 purego 调系统 API）；Linux 需 GTK3 系统库 |
+| Docker | linux/amd64 + linux/arm64 | buildx 多架构，镜像内跑 CLI + 面板 |
+| Android `apps/android` | Go 侧就绪 | 4 个 ABI 的 bind 层编译通过；APK 需要 SDK/NDK 与 gomobile |
+| iOS | 未做 | 库已与平台解耦，后续接 c-archive 即可 |
 
 ## 开发
 
 ```bash
 go test ./...     # sign / sub / totp 的单元测试
 go vet ./...
+
+# 交叉编译（CI 里跑的就是这些）
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./apps/desktop
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build ./apps/desktop
+GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build ./apps/android/bind
 ```
 
 目录结构：
@@ -156,6 +232,21 @@ apps/android             Android 端（gomobile 门面 + VpnService + Compose）
 
 库不含任何监听与序列化：`httpapi` 才提供 HTTP 契约，端侧按需启动。
 Android 端只启用库与 VpnService，不起代理与面板，构建方式见 [apps/android/README.md](apps/android/README.md)。
+
+## 发版
+
+版本号是日期，不用手写：
+
+- 触发：仓库 Actions → `release` → `Run workflow`（也可以自己打 tag，形如 `v2026.11.21`）
+- 版本号 = 当天日期 `v2026.11.21`；同一天发第二次自动变 `v2026.11.21.2`
+- 产物：goreleaser 出 6 个平台的 CLI 包 + 桌面端包，ghcr 出 `corplink-go:2026.11.21` 与 `latest`（linux/amd64 + linux/arm64）
+- Android 的 `versionName` 用同一个字符串，`versionCode` 由它派生（`2026.11.21` → `20261121`）
+
+本地想先看产物：
+
+```bash
+goreleaser release --snapshot --clean     # 不发布，只在本地产出 dist/
+```
 
 ## 作为库使用
 

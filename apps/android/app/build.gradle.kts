@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 版本号跟发版流水线一致：默认 0.0.0，CI 传 -PcorplinkVersion=2026.11.21。
+// versionCode 必须单调递增，用日期拼数字（2026.11.21 → 20261121，同一天第二次 → 202611212）。
+val corplinkVersion = (findProperty("corplinkVersion") as String?) ?: "0.0.0"
+val corplinkVersionCode = corplinkVersion
+    .split(".")
+    .mapNotNull { it.toIntOrNull() }
+    .joinToString("")
+    .toIntOrNull()
+    ?.coerceAtLeast(1)
+    ?: 1
+
 android {
     namespace = "dev.corplink.android"
     compileSdk = 35
@@ -12,8 +23,8 @@ android {
         applicationId = "dev.corplink.android"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = corplinkVersionCode
+        versionName = corplinkVersion
     }
 
     buildFeatures {

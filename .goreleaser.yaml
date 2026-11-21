@@ -3,6 +3,7 @@ version: 2
 project_name: corplink-go
 
 builds:
+  # CLI 与服务端：纯 Go，无 cgo。
   - id: corplink
     main: ./apps/cli
     binary: corplink
@@ -13,8 +14,42 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
+  # 桌面端：macOS 与 Linux 共用一份配置。
+  - id: corplink-desktop
+    main: ./apps/desktop
+    binary: corplink-desktop
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+  # Windows 桌面端单独一份：GUI 子系统，避免双击先弹控制台窗口。
+  - id: corplink-desktop-windows
+    main: ./apps/desktop
+    binary: corplink-desktop
+    env:
+      - CGO_ENABLED=0
+    goos: [windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -H=windowsgui
+
 archives:
-  - formats: [tar.gz]
+  - id: cli
+    ids: [corplink]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+  - id: desktop
+    ids: [corplink-desktop, corplink-desktop-windows]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats: [zip]

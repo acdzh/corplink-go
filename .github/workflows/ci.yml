@@ -27,7 +27,68 @@ jobs:
             echo "$leaked"
             exit 1
           fi
-      - name: 库与 Android 门面的交叉编译
+
+  cross:
+    name: cross ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: 库与 CLI
+        run: go build ./corplink/... ./apps/cli
+      - name: 桌面端
+        run: go build ./apps/desktop
+      - name: Android 绑定层（Go 侧）
+        if: matrix.goos == 'linux' && matrix.goarch == 'arm64'
+        run: GOOS=android GOARCH=arm64 go build ./apps/android/bind
+
+  desktop-macos:
+    name: desktop macOS 原生构建
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: 构建可执行文件
+        env:
+          CGO_ENABLED: '0'
         run: |
-          GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build ./corplink/... ./apps/android/bind
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./corplink/... ./apps/cli
+          mkdir -p dist
+          go build -o dist/corplink-desktop ./apps/desktop
+          file dist/corplink-desktop
+      - name: 包成 .app 并校验
+        run: |
+          scripts/macos-app.sh dist/corplink-desktop "dist/Corplink Go.app"
+          plutil -lint "dist/Corplink Go.app/Contents/Info.plist"
+          test -x "dist/Corplink Go.app/Contents/MacOS/Corplink Go"
+
+  docker:
+    name: docker 多架构构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: 构建镜像（不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
