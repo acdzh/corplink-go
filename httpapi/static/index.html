@@ -1,0 +1,1993 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corplink Go · 控制面板</title>
+<link rel="icon" href="/icon.svg">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: light-dark(#f6f8f7, #101211);
+    --surface: light-dark(#ffffff, #171918);
+    --subtle: light-dark(#eef1f0, #202221);
+    --hover: light-dark(#e6e9e8, #272a29);
+    --ink: light-dark(#1a211e, #eceeed);
+    --muted: light-dark(#5f6563, #adb5b2);
+    --faint: light-dark(#868e8b, #717d79);
+    --line: light-dark(#d7dad9, #373b39);
+    --line-soft: light-dark(#e6e9e8, #272a29);
+    --accent: light-dark(#218358, #3dd68c);
+    --accent-solid: light-dark(#2b9a66, #30a46c);
+    --accent-soft: light-dark(#e6f6eb, #132d21);
+    --accent-border: light-dark(#adddc0, #20573e);
+    --warn: light-dark(#b45309, #fbbf24);
+    --warn-soft: light-dark(#fef3c7, #33240c);
+    --err: light-dark(#ce2c31, #ff9592);
+    --err-soft: light-dark(#feebec, #3b1219);
+    --err-border: light-dark(#fdbdbe, #72232d);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    padding: 28px 18px 72px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 4px 4px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .brand img {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+
+  .brand-title {
+    font-size: 18px;
+    font-weight: 650;
+    letter-spacing: -0.2px;
+    margin: 0;
+  }
+
+  .brand-sub {
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  h2 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .spread {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .muted {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .faint {
+    color: var(--faint);
+    font-size: 12px;
+  }
+
+  .mono {
+    font-family: var(--mono);
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--faint);
+    flex: none;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+
+  .dot.on {
+    background: var(--accent-solid);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent-solid) 22%, transparent);
+  }
+
+  .dot.busy {
+    background: var(--warn);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--warn) 40%, transparent); }
+    50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--warn) 0%, transparent); }
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    background: var(--subtle);
+    white-space: nowrap;
+  }
+
+  .badge.ok {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+  }
+
+  .badge.warn {
+    color: var(--warn);
+    background: var(--warn-soft);
+    border-color: color-mix(in oklab, var(--warn) 35%, transparent);
+  }
+
+  .badge.err {
+    color: var(--err);
+    background: var(--err-soft);
+    border-color: var(--err-border);
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 12px;
+  }
+
+  .pill {
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 7px;
+    background: var(--subtle);
+    color: var(--muted);
+    border: 1px solid var(--line-soft);
+    font-family: var(--mono);
+  }
+
+  .banner {
+    margin-top: 12px;
+    padding: 10px 13px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .banner.err {
+    background: var(--err-soft);
+    border: 1px solid var(--err-border);
+    color: var(--err);
+  }
+
+  .banner.warn {
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in oklab, var(--warn) 30%, transparent);
+    color: var(--warn);
+  }
+
+  button, a.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 7px 13px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
+    white-space: nowrap;
+  }
+
+  button:hover:not(:disabled), a.btn:hover {
+    background: var(--hover);
+  }
+
+  button.primary {
+    background: var(--accent-solid);
+    border-color: transparent;
+    color: #ffffff;
+  }
+
+  button.primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+    background: var(--accent-solid);
+  }
+
+  button.danger {
+    color: var(--err);
+    border-color: var(--err-border);
+    background: transparent;
+  }
+
+  button.danger:hover:not(:disabled) {
+    background: var(--err-soft);
+  }
+
+  button.sm, a.btn.sm {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 7px;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  select, input {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 7px 10px;
+    min-width: 0;
+  }
+
+  select:focus, input:focus {
+    outline: 2px solid color-mix(in oklab, var(--accent-solid) 35%, transparent);
+    outline-offset: 1px;
+    border-color: var(--accent-solid);
+  }
+
+  .grid4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px 16px;
+  }
+
+  .metric-box {
+    background: var(--subtle);
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    padding: 11px 13px;
+  }
+
+  .metric {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    margin-top: 3px;
+  }
+
+  .metric-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    margin-top: 2px;
+  }
+
+  .access-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .access-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .code-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    padding: 6px 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .tag-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .tag-btn {
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--subtle);
+    border: 1px solid var(--line-soft);
+    color: var(--muted);
+  }
+
+  .tag-btn.active {
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--faint);
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+    padding: 0 8px 9px;
+    border-bottom: 1px solid var(--line-soft);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: middle;
+  }
+
+  tr:last-child td {
+    border-bottom: 0;
+  }
+
+  tr:hover td {
+    background: var(--subtle);
+  }
+
+  tr.active-row td {
+    background: color-mix(in oklab, var(--accent-soft) 65%, transparent);
+  }
+
+  .node-name {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 500;
+  }
+
+  .node-ico {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: var(--subtle);
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .lat-btn {
+    border: 0;
+    background: transparent;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+
+  .lat-btn:hover {
+    background: var(--hover);
+  }
+
+  .lat-good { color: var(--accent); }
+  .lat-mid { color: var(--warn); }
+  .lat-bad { color: var(--err); }
+
+  .totp-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .totp-code {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 5px;
+    cursor: pointer;
+    user-select: all;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--subtle);
+    overflow: hidden;
+    margin-top: 10px;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--accent-solid);
+    transition: width 0.3s linear, background 0.2s;
+  }
+
+  .progress-fill.urgent {
+    background: var(--err);
+  }
+
+  .route-tabs {
+    display: flex;
+    gap: 6px;
+  }
+
+  .route-list {
+    margin-top: 10px;
+    max-height: 190px;
+    overflow: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 0;
+  }
+
+  .route-item {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--subtle);
+    border: 1px solid var(--line-soft);
+    color: var(--muted);
+  }
+
+  label.field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  label.field input, label.field select {
+    width: 100%;
+  }
+
+  details summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 12px;
+    user-select: none;
+  }
+
+  .step-box {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 10px;
+    background: var(--subtle);
+    border: 1px solid var(--line-soft);
+  }
+
+  #logs {
+    max-height: 220px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .log-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 2px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .log-row:last-child {
+    border-bottom: 0;
+  }
+
+  .log-time {
+    color: var(--faint);
+    flex: none;
+  }
+
+  .log-lvl {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    flex: none;
+  }
+
+  .log-lvl.info { color: var(--accent); background: var(--accent-soft); }
+  .log-lvl.warn { color: var(--warn); background: var(--warn-soft); }
+  .log-lvl.error { color: var(--err); background: var(--err-soft); }
+
+  .log-msg {
+    color: var(--ink);
+    word-break: break-word;
+  }
+
+  #toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 999;
+    padding: 10px 15px;
+    border-radius: 10px;
+    background: var(--ink);
+    color: var(--bg);
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+    opacity: 0;
+    transform: translateY(10px);
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+
+  #toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  #toast.err {
+    background: var(--err);
+    color: #ffffff;
+  }
+
+  .easter-footer {
+    font-size: 12px;
+    color: var(--faint);
+    text-align: center;
+    padding: 12px 0 4px;
+    user-select: none;
+  }
+
+  .easter-trigger {
+    cursor: pointer;
+    transition: color 0.2s ease;
+  }
+
+  .easter-trigger:hover {
+    color: var(--accent);
+  }
+
+  .easter-choices {
+    display: none;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .easter-choices.open {
+    display: flex;
+  }
+
+  @media (max-width: 760px) {
+    .grid4 { grid-template-columns: repeat(2, 1fr); }
+    .grid2 { grid-template-columns: 1fr; }
+    .access-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">
+      <img src="/icon.svg" alt="Corplink Go">
+      <div>
+        <h1 class="brand-title">Corplink Go</h1>
+        <div class="brand-sub" id="companyLabel">开源飞连客户端控制台</div>
+      </div>
+    </div>
+    <div class="row">
+      <span class="badge" id="modeBadge">模式: -</span>
+      <span class="badge" id="loginBadge">未登录</span>
+    </div>
+  </header>
+
+  <section class="card" id="heroCard">
+    <div class="spread">
+      <div class="row">
+        <span class="dot" id="dot"></span>
+        <strong id="stateTitle" style="font-size:16px">未连接</strong>
+        <span class="badge" id="stateTag" style="display:none"></span>
+      </div>
+      <span class="faint mono" id="serverLabel"></span>
+    </div>
+
+    <div class="pills" id="tunnelPills" style="display:none"></div>
+
+    <div class="banner warn" id="guideBanner" style="display:none">
+      <span id="guideText"></span>
+      <button class="sm" id="btnGuideAction"></button>
+    </div>
+
+    <div class="banner err" id="errBanner" style="display:none">
+      <span id="errText"></span>
+      <button class="sm" id="btnDismissErr">知道了</button>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <select id="nodeSelect" style="flex:1;min-width:220px"></select>
+      <button class="primary" id="btnConnect">连接</button>
+      <button id="btnDisconnect" disabled>断开</button>
+      <button id="btnPingAll">全部测速</button>
+      <button id="btnRefresh">刷新节点</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>流量与代理接入</h2>
+      <span class="faint mono" id="connInfo">未建立连接</span>
+    </div>
+    <div class="grid4">
+      <div class="metric-box">
+        <div class="muted">上行总计</div>
+        <div class="metric" id="tx">-</div>
+      </div>
+      <div class="metric-box">
+        <div class="muted">下行总计</div>
+        <div class="metric" id="rx">-</div>
+      </div>
+      <div class="metric-box">
+        <div class="muted">上行速率</div>
+        <div class="metric" id="txRate">-</div>
+        <div class="metric-sub" id="txPeak"></div>
+      </div>
+      <div class="metric-box">
+        <div class="muted">下行速率</div>
+        <div class="metric" id="rxRate">-</div>
+        <div class="metric-sub" id="rxPeak"></div>
+      </div>
+    </div>
+
+    <div class="access-grid">
+      <div class="access-item">
+        <div class="muted">本地混合代理（SOCKS5 + HTTP）</div>
+        <div class="code-line">
+          <code id="proxyAddr">127.0.0.1:3710</code>
+          <button class="sm" id="btnCopyProxy">复制地址</button>
+          <button class="sm" id="btnCopyEnv">复制终端命令</button>
+        </div>
+      </div>
+      <div class="access-item">
+        <div class="muted">Clash 订阅配置</div>
+        <div class="code-line">
+          <code id="subUrl"></code>
+          <button class="sm" id="btnCopySub">复制链接</button>
+          <a class="btn sm" id="btnImportClash" href="#">导入 Clash</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="row">
+        <h2>节点列表</h2>
+        <span class="faint" id="nodeCount">0 个</span>
+      </div>
+      <input id="nodeSearch" placeholder="搜索节点名称、IP 或标签..." style="width:240px">
+    </div>
+    <div class="filter-bar">
+      <div class="tag-pills" id="tagPills"></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>节点</th>
+            <th>标签</th>
+            <th>协议</th>
+            <th>延迟（点击单测）</th>
+            <th>内网 / 节点地址</th>
+            <th style="text-align:right">操作</th>
+          </tr>
+        </thead>
+        <tbody id="nodeTable"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="routesCard">
+    <div class="card-head">
+      <div class="row">
+        <h2>分流规则校验</h2>
+        <span class="faint" id="routeSummary">连接隧道后可查看下发规则</span>
+      </div>
+      <div class="row">
+        <div class="route-tabs">
+          <button class="sm tag-btn active" id="tabRoutes">网段 (0)</button>
+          <button class="sm tag-btn" id="tabDomains">域名 (0)</button>
+        </div>
+        <input id="routeFilter" placeholder="输入 IP 或域名校验是否命中分流..." style="width:250px">
+      </div>
+    </div>
+    <div class="muted" id="routeMatchTip" style="display:none;margin-bottom:8px"></div>
+    <div class="route-list" id="routeList"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <div class="card-head">
+        <h2>二次验证动态码 (TOTP)</h2>
+        <span class="badge" id="totpTip">未绑定</span>
+      </div>
+      <div class="totp-wrap">
+        <div class="totp-code" id="totpCode" title="点击复制验证码">------</div>
+        <button class="sm" id="btnCopyTotp" disabled>复制验证码</button>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="totpBar" style="width:0%"></div>
+      </div>
+    </section>
+
+    <section class="card" id="loginCard">
+      <div class="card-head">
+        <h2>账号登录</h2>
+        <span class="faint" id="loginCardSub">第三方授权 + 二次验证</span>
+      </div>
+      <div class="row">
+        <select id="loginMethod" style="min-width:150px">
+          <option value="">默认登录方式</option>
+        </select>
+        <button class="primary" id="btnLogin">获取授权链接</button>
+        <button class="danger" id="btnLogout" style="display:none">退出登录</button>
+      </div>
+      <div class="row" id="loginLinkRow" style="display:none;margin-top:10px">
+        <a id="loginLink" href="#" target="_blank" class="btn sm">打开授权页 ↗</a>
+        <button class="sm" id="btnCopyAuthUrl">复制授权链接</button>
+      </div>
+      <div class="step-box" id="loginStep2" style="display:none">
+        <div class="muted" style="margin-bottom:6px">第 2 步：在浏览器完成授权后，将跳转的回调地址粘贴到此处：</div>
+        <div class="row">
+          <input id="callback" placeholder="粘贴 corplink://login/callback?... 或参数串" style="flex:1">
+          <button class="primary" id="btnCallback">提交回调</button>
+        </div>
+      </div>
+      <div class="step-box" id="loginStep3" style="display:none">
+        <div class="muted" id="mfaPrompt" style="margin-bottom:6px">第 3 步：完成二次验证：</div>
+        <div class="row">
+          <input id="mfaCode" placeholder="输入验证码（已绑定 TOTP 可留空自动填）" style="flex:1">
+          <button class="sm" id="btnSendMfa">发送邮箱验证码</button>
+          <button class="primary" id="btnMfa">提交验证</button>
+        </div>
+      </div>
+      <div class="muted" id="loginTip" style="margin-top:10px"></div>
+    </section>
+  </div>
+
+  <section class="card" id="settingsCard">
+    <div class="card-head">
+      <h2>系统设置</h2>
+      <span class="faint" id="settingsTip"></span>
+    </div>
+    <div class="grid2">
+      <label class="field">企业代码 (company_name)<input id="setCompany" placeholder="例如 your-company"></label>
+      <label class="field">服务端地址 (server，留空自动解析)<input id="setServer" placeholder="https://sealsuite.example.com"></label>
+      <label class="field">代理监听地址 (SOCKS5 + HTTP)<input id="setProxy" placeholder="127.0.0.1:3710"></label>
+      <label class="field">控制面板监听地址<input id="setPanel" placeholder="127.0.0.1:13140"></label>
+      <label class="field">代理认证用户名（留空不认证）<input id="setUser" placeholder="可选"></label>
+      <label class="field">代理认证密码<input id="setPass" type="password" placeholder="可选"></label>
+      <label class="field">自动选路测速间隔（秒）<input id="setAutoInterval" type="number" min="0"></label>
+      <label class="field">会话保活间隔（秒）<input id="setKeepalive" type="number" min="0"></label>
+    </div>
+    <details>
+      <summary>高级与设备上报参数</summary>
+      <div class="grid2" style="margin-top:12px">
+        <label class="field">设备激活码 (activate_code，可选)<input id="setActivate" placeholder="通常留空与企业代码一致"></label>
+        <label class="field">日志级别<select id="setLog">
+          <option value="debug">debug</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select></label>
+        <label class="field">设备型号<input id="setModel"></label>
+        <label class="field">设备品牌<input id="setBrand"></label>
+        <label class="field">系统 API 版本<input id="setOsVer" type="number" min="21" max="40"></label>
+        <label class="field">系统补丁日期<input id="setOsPatch" placeholder="2023-07-05"></label>
+      </div>
+    </details>
+    <div class="row" style="margin-top:16px">
+      <button class="primary" id="btnSaveSettings">保存设置</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>运行日志</h2>
+      <button class="sm" id="btnClearLogs">清空日志</button>
+    </div>
+    <div id="logs"></div>
+  </section>
+
+  <footer class="easter-footer">
+    <span class="easter-trigger" id="easterTrigger" title="一生、バンド……プロキシする？">一生プロキシしてくれる？</span>
+    <div class="easter-choices" id="easterChoices">
+      <button class="sm primary" id="btnEasterAccept">「一生、プロキシする」</button>
+      <button class="sm" id="btnEasterHeavy">「重いよ…」</button>
+    </div>
+  </footer>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+let nodes = [];
+let latency = {};
+let serverStatus = null;
+let userPicked = '';
+let pickedInitialized = false;
+let activeTag = 'ALL';
+let routeTab = 'routes';
+let currentRoutes = { routes: [], domains: [] };
+let lastSample = null;
+let peakTxRate = 0;
+let peakRxRate = 0;
+let currentTotp = '';
+let localErr = '';
+let connecting = false;
+let pinging = false;
+let refreshing = false;
+let toastTimer = null;
+let lifetimePact = false;
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function showToast(msg, isErr) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = isErr ? 'show err' : 'show';
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+  }
+  toastTimer = setTimeout(() => {
+    el.className = '';
+  }, 2400);
+}
+
+async function copyText(text, label) {
+  if (!text) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast((label || '内容') + '已复制');
+  } catch (e) {
+    showToast('复制失败，请手动复制', true);
+  }
+}
+
+function fmtBytes(n) {
+  if (!n) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return v.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function fmtDuration(sec) {
+  if (!sec || sec <= 0) {
+    return '-';
+  }
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return (h ? h + 'h ' : '') + (m ? m + 'm ' : '') + s + 's';
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || ('HTTP ' + res.status));
+  }
+  return res.json();
+}
+
+function sortedNodes() {
+  if (!Object.keys(latency).length) {
+    return nodes;
+  }
+  return [...nodes].sort((a, b) => {
+    const la = latency[a.name];
+    const lb = latency[b.name];
+    const va = la === undefined || la < 0 ? Number.MAX_SAFE_INTEGER : la;
+    const vb = lb === undefined || lb < 0 ? Number.MAX_SAFE_INTEGER : lb;
+    return va - vb;
+  });
+}
+
+function nodeIcon(n) {
+  if (n.icon) {
+    return '<img class="node-ico" src="/api/icon?u=' + encodeURIComponent(n.icon) + '" alt="" loading="lazy">';
+  }
+  return '<span class="node-ico">🌐</span>';
+}
+
+function latencyView(ms) {
+  if (ms === undefined) {
+    return { cls: 'faint', text: '未测' };
+  }
+  if (ms < 0) {
+    return { cls: 'lat-bad', text: '超时' };
+  }
+  if (ms < 100) {
+    return { cls: 'lat-good', text: ms + ' ms' };
+  }
+  if (ms < 250) {
+    return { cls: 'lat-mid', text: ms + ' ms' };
+  }
+  return { cls: 'lat-bad', text: ms + ' ms' };
+}
+
+function renderTagPills() {
+  const tags = [];
+  const seen = new Set();
+  for (const n of nodes) {
+    if (n.tag && !seen.has(n.tag)) {
+      seen.add(n.tag);
+      tags.push(n.tag);
+    }
+  }
+  if (activeTag !== 'ALL' && !seen.has(activeTag)) {
+    activeTag = 'ALL';
+  }
+  const items = ['ALL', ...tags];
+  $('tagPills').innerHTML = items.map((t) => {
+    const label = t === 'ALL' ? '全部 (' + nodes.length + ')' : t;
+    const cls = activeTag === t ? 'tag-btn active' : 'tag-btn';
+    return '<button type="button" class="' + cls + '" data-tag="' + esc(t) + '">' + esc(label) + '</button>';
+  }).join('');
+  for (const btn of $('tagPills').querySelectorAll('button')) {
+    btn.onclick = () => {
+      activeTag = btn.dataset.tag;
+      renderNodes();
+    };
+  }
+}
+
+function renderNodes() {
+  renderTagPills();
+  const list = sortedNodes();
+  const autoMs = Object.values(latency).filter((v) => v >= 0).sort((a, b) => a - b)[0];
+  const sel = $('nodeSelect');
+  sel.innerHTML = '<option value="auto">🚀 自动选择（最快节点' + (autoMs !== undefined ? ' · ' + autoMs + 'ms' : '') + '）</option>'
+    + list.map((n) => {
+      const ms = latency[n.name];
+      const tail = ms !== undefined && ms >= 0 ? ' · ' + ms + 'ms' : '';
+      return '<option value="' + esc(n.name) + '">' + esc(n.name) + tail + '</option>';
+    }).join('');
+  if (userPicked && (userPicked === 'auto' || list.some((n) => n.name === userPicked))) {
+    sel.value = userPicked;
+  } else {
+    sel.value = 'auto';
+    userPicked = 'auto';
+  }
+
+  const kw = $('nodeSearch').value.trim().toLowerCase();
+  const filtered = list.filter((n) => {
+    if (activeTag !== 'ALL' && n.tag !== activeTag) {
+      return false;
+    }
+    if (!kw) {
+      return true;
+    }
+    const hay = [n.name, n.raw_name, n.ip, n.internal_ip, n.tag, n.type].join(' ').toLowerCase();
+    return hay.includes(kw);
+  });
+
+  $('nodeCount').textContent = filtered.length === list.length
+    ? (list.length + ' 个')
+    : (filtered.length + ' / ' + list.length + ' 个');
+
+  const connectedNode = serverStatus && serverStatus.state && serverStatus.state.connected
+    ? serverStatus.state.node
+    : '';
+  const isAutoActive = Boolean(serverStatus && serverStatus.auto && connectedNode);
+
+  let html = '';
+  if (!kw && activeTag === 'ALL') {
+    const autoRowCls = isAutoActive ? 'active-row' : '';
+    const autoLat = autoMs !== undefined ? '<span class="lat-good">' + autoMs + ' ms</span>' : '<span class="faint">–</span>';
+    html += '<tr class="' + autoRowCls + '">'
+      + '<td><div class="node-name"><span class="node-ico">🚀</span><span>自动选择</span>'
+      + (isAutoActive ? '<span class="badge ok">自动运行中</span>' : '') + '</div></td>'
+      + '<td class="muted">按测速结果选择最快节点</td>'
+      + '<td class="faint">AUTO</td>'
+      + '<td class="mono">' + autoLat + '</td>'
+      + '<td class="faint">-</td>'
+      + '<td style="text-align:right"><button class="sm" data-connect="auto">' + (isAutoActive ? '重选' : '连接') + '</button></td>'
+      + '</tr>';
+  }
+
+  for (const n of filtered) {
+    const ms = latency[n.name];
+    const lv = latencyView(ms);
+    const isCurrent = connectedNode === n.name;
+    const chips = [n.tag, n.type].filter(Boolean).map((c) => '<span class="badge">' + esc(c) + '</span>').join(' ');
+    const proto = n.protocol_mode === 1 ? 'TCP' : 'UDP';
+    const ipText = n.internal_ip || n.ip || '-';
+    html += '<tr class="' + (isCurrent ? 'active-row' : '') + '">'
+      + '<td><div class="node-name">' + nodeIcon(n) + '<span>' + esc(n.name) + '</span>'
+      + (isCurrent ? '<span class="badge ok">当前连接</span>' : '') + '</div></td>'
+      + '<td>' + (chips || '<span class="faint">-</span>') + '</td>'
+      + '<td><span class="badge">' + proto + '</span></td>'
+      + '<td><button class="lat-btn ' + lv.cls + '" data-ping="' + esc(n.name) + '" title="点击测速">' + lv.text + '</button></td>'
+      + '<td class="mono muted">' + esc(ipText) + '</td>'
+      + '<td style="text-align:right"><button class="sm ' + (isCurrent ? '' : 'primary') + '" data-connect="' + esc(n.name) + '">' + (isCurrent ? '重连' : '连接') + '</button></td>'
+      + '</tr>';
+  }
+
+  if (!filtered.length && (kw || activeTag !== 'ALL')) {
+    html = '<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">没有匹配的节点</td></tr>';
+  } else if (!nodes.length) {
+    html += '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">暂无节点，请先完成登录并刷新节点</td></tr>';
+  }
+
+  $('nodeTable').innerHTML = html;
+
+  for (const btn of $('nodeTable').querySelectorAll('button[data-connect]')) {
+    btn.onclick = () => {
+      connectNode(btn.dataset.connect);
+    };
+  }
+  for (const btn of $('nodeTable').querySelectorAll('button[data-ping]')) {
+    btn.onclick = () => {
+      pingOne(btn.dataset.ping, btn);
+    };
+  }
+  updateActionButtons();
+}
+
+function updateActionButtons() {
+  const connected = Boolean(serverStatus && serverStatus.state && serverStatus.state.connected);
+  const current = connected ? serverStatus.state.node : '';
+  const btn = $('btnConnect');
+  if (connecting) {
+    btn.textContent = '连接中...';
+    btn.disabled = true;
+  } else {
+    btn.disabled = false;
+    if (connected && userPicked && userPicked !== 'auto' && userPicked !== current) {
+      btn.textContent = '切换节点';
+    } else if (connected) {
+      btn.textContent = '重新连接';
+    } else {
+      btn.textContent = '连接';
+    }
+  }
+  $('btnDisconnect').disabled = !connected || connecting;
+  $('btnPingAll').disabled = pinging;
+  $('btnPingAll').textContent = pinging ? '测速中...' : '全部测速';
+  $('btnRefresh').disabled = refreshing;
+  $('btnRefresh').textContent = refreshing ? '刷新中...' : '刷新节点';
+}
+
+function renderStatus() {
+  if (!serverStatus) {
+    return;
+  }
+  const resp = serverStatus;
+  const s = resp.state || {};
+
+  if (!pickedInitialized) {
+    pickedInitialized = true;
+    if (resp.auto || resp.mode === 'auto') {
+      userPicked = 'auto';
+    } else if (resp.mode) {
+      userPicked = resp.mode;
+    } else if (s.node) {
+      userPicked = s.node;
+    } else {
+      userPicked = 'auto';
+    }
+    if (nodes.length) {
+      renderNodes();
+    }
+  }
+
+  $('companyLabel').textContent = resp.company_name ? ('企业: ' + resp.company_name) : '开源飞连客户端控制台';
+  $('serverLabel').textContent = resp.server || '未配置服务端';
+  if (resp.proxy_addr) {
+    $('proxyAddr').textContent = resp.proxy_addr;
+  }
+
+  const dot = $('dot');
+  if (connecting) {
+    dot.className = 'dot busy';
+    $('stateTitle').textContent = '正在建立隧道...';
+  } else if (s.connected) {
+    dot.className = 'dot on';
+    $('stateTitle').textContent = s.node || '已连接';
+  } else {
+    dot.className = 'dot';
+    $('stateTitle').textContent = '未连接';
+  }
+
+  const tagEl = $('stateTag');
+  if (s.connected && s.tag) {
+    tagEl.style.display = 'inline-flex';
+    tagEl.textContent = s.tag;
+  } else {
+    tagEl.style.display = 'none';
+  }
+
+  const modeBadge = $('modeBadge');
+  if (resp.auto || resp.mode === 'auto') {
+    modeBadge.textContent = '模式: 自动选路';
+    modeBadge.className = 'badge ok';
+  } else if (s.connected && s.node) {
+    modeBadge.textContent = '节点: ' + s.node;
+    modeBadge.className = 'badge';
+  } else {
+    modeBadge.textContent = '模式: 手动';
+    modeBadge.className = 'badge';
+  }
+
+  const loginBadge = $('loginBadge');
+  if (resp.logged_in && !resp.mfa_pending) {
+    loginBadge.textContent = '已登录';
+    loginBadge.className = 'badge ok';
+    $('btnLogout').style.display = 'inline-flex';
+  } else if (resp.mfa_pending) {
+    loginBadge.textContent = '待二次验证';
+    loginBadge.className = 'badge warn';
+    $('loginStep3').style.display = 'block';
+    $('btnLogout').style.display = 'inline-flex';
+  } else {
+    loginBadge.textContent = '未登录';
+    loginBadge.className = 'badge';
+    $('btnLogout').style.display = 'none';
+  }
+
+  if (resp.mfa_pending) {
+    $('mfaPrompt').textContent = resp.has_totp
+      ? '第 3 步：已绑定本地 TOTP，可直接留空自动填码验证，或手动输入验证码：'
+      : '第 3 步：请输入二次验证码，或点击发送邮箱验证码：';
+  }
+
+  const pills = $('tunnelPills');
+  if (s.connected) {
+    const items = [
+      '隧道 ' + (s.address || '-'),
+      '协议 ' + (s.protocol || '-'),
+      'MTU ' + (s.mtu || '-'),
+      '路由 ' + (s.routes || 0) + ' 条',
+      '域名 ' + (s.domains || 0) + ' 个',
+    ];
+    if (s.dns && s.dns.length) {
+      items.push('DNS ' + s.dns.join(', '));
+    }
+    pills.innerHTML = items.map((t) => '<span class="pill">' + esc(t) + '</span>').join('');
+    pills.style.display = 'flex';
+  } else {
+    pills.style.display = 'none';
+  }
+
+  const guide = $('guideBanner');
+  if (!resp.server) {
+    guide.style.display = 'flex';
+    $('guideText').textContent = '尚未配置企业服务端，请先填写企业代码或服务端地址。';
+    $('btnGuideAction').textContent = '去配置';
+    $('btnGuideAction').onclick = () => {
+      $('settingsCard').scrollIntoView({ behavior: 'smooth' });
+      $('setCompany').focus();
+    };
+  } else if (!resp.logged_in) {
+    guide.style.display = 'flex';
+    $('guideText').textContent = '当前尚未登录企业账号，完成授权登录后即可拉取节点。';
+    $('btnGuideAction').textContent = '去登录';
+    $('btnGuideAction').onclick = () => {
+      $('loginCard').scrollIntoView({ behavior: 'smooth' });
+    };
+  } else {
+    guide.style.display = 'none';
+  }
+
+  const errMsg = localErr || resp.error || '';
+  if (errMsg) {
+    $('errText').textContent = errMsg;
+    $('errBanner').style.display = 'flex';
+  } else {
+    $('errBanner').style.display = 'none';
+  }
+
+  updateActionButtons();
+}
+
+async function refreshStatus() {
+  try {
+    serverStatus = await api('/api/status');
+    renderStatus();
+    renderNodes();
+    if (serverStatus.state && serverStatus.state.connected) {
+      loadRoutes();
+    } else {
+      currentRoutes = { routes: [], domains: [] };
+      renderRoutes();
+    }
+  } catch (e) {
+    localErr = '读取状态失败: ' + e.message;
+    renderStatus();
+  }
+}
+
+async function loadNodes() {
+  try {
+    nodes = await api('/api/nodes');
+    renderNodes();
+  } catch (e) {
+    showToast('加载节点失败: ' + e.message, true);
+  }
+}
+
+async function refreshStats() {
+  try {
+    const st = await api('/api/stats');
+    if (!st.connected) {
+      ['tx', 'rx', 'txRate', 'rxRate'].forEach((id) => {
+        $(id).textContent = '-';
+      });
+      $('txPeak').textContent = '';
+      $('rxPeak').textContent = '';
+      $('connInfo').textContent = '未建立连接';
+      lastSample = null;
+      peakTxRate = 0;
+      peakRxRate = 0;
+      return;
+    }
+    $('tx').textContent = fmtBytes(st.tx_bytes);
+    $('rx').textContent = fmtBytes(st.rx_bytes);
+    const now = Date.now();
+    if (lastSample) {
+      const dt = (now - lastSample.t) / 1000;
+      if (dt > 0.5) {
+        const txR = Math.max(0, (st.tx_bytes - lastSample.tx) / dt);
+        const rxR = Math.max(0, (st.rx_bytes - lastSample.rx) / dt);
+        if (txR > peakTxRate) {
+          peakTxRate = txR;
+        }
+        if (rxR > peakRxRate) {
+          peakRxRate = rxR;
+        }
+        $('txRate').textContent = fmtBytes(txR) + '/s';
+        $('rxRate').textContent = fmtBytes(rxR) + '/s';
+        $('txPeak').textContent = '峰值 ' + fmtBytes(peakTxRate) + '/s';
+        $('rxPeak').textContent = '峰值 ' + fmtBytes(peakRxRate) + '/s';
+      }
+    }
+    lastSample = { t: now, tx: st.tx_bytes, rx: st.rx_bytes };
+    $('connInfo').textContent = '在线 ' + fmtDuration(st.uptime_seconds)
+      + (st.last_handshake ? ' · 最近握手 ' + new Date(st.last_handshake * 1000).toLocaleTimeString() : '');
+  } catch (e) {
+    // 忽略瞬时轮询报错
+  }
+}
+
+async function connectNode(target) {
+  const name = target || userPicked || 'auto';
+  connecting = true;
+  localErr = '';
+  renderStatus();
+  try {
+    await api('/api/connect?node=' + encodeURIComponent(name), { method: 'POST' });
+    userPicked = name;
+    showToast('已连接: ' + (name === 'auto' ? '自动选择' : name));
+  } catch (e) {
+    localErr = '连接失败: ' + e.message;
+    showToast(localErr, true);
+  } finally {
+    connecting = false;
+    await refreshStatus();
+    await refreshStats();
+    await refreshLogs();
+  }
+}
+
+async function disconnect() {
+  try {
+    await api('/api/disconnect', { method: 'POST' });
+    if (lifetimePact) {
+      lifetimePact = false;
+      $('easterTrigger').textContent = '一生プロキシしてくれる？';
+      showToast('「なんでプロキシ切ったの！？」', true);
+    } else {
+      showToast('已断开隧道');
+    }
+    await refreshStatus();
+    await refreshStats();
+    await refreshLogs();
+  } catch (e) {
+    showToast('断开失败: ' + e.message, true);
+  }
+}
+
+async function pingOne(name, btn) {
+  if (btn) {
+    btn.textContent = '...';
+  }
+  try {
+    const r = await api('/api/latency?node=' + encodeURIComponent(name));
+    latency[name] = r.ms;
+    renderNodes();
+  } catch (e) {
+    showToast('测速失败: ' + e.message, true);
+    renderNodes();
+  }
+}
+
+async function pingAll() {
+  pinging = true;
+  updateActionButtons();
+  try {
+    latency = await api('/api/latency/all', { method: 'POST' });
+    renderNodes();
+    showToast('全部节点测速完成');
+  } catch (e) {
+    showToast('测速失败: ' + e.message, true);
+  } finally {
+    pinging = false;
+    updateActionButtons();
+  }
+}
+
+async function refreshLatency() {
+  try {
+    latency = await api('/api/latencies');
+    renderNodes();
+  } catch (e) {
+    // 忽略初始化测速读取错误
+  }
+}
+
+async function refreshNodes() {
+  refreshing = true;
+  updateActionButtons();
+  try {
+    const r = await api('/api/refresh', { method: 'POST' });
+    await loadNodes();
+    await refreshStatus();
+    showToast('已刷新节点，共 ' + (r.nodes || 0) + ' 个');
+  } catch (e) {
+    localErr = '刷新节点失败: ' + e.message;
+    renderStatus();
+    showToast(localErr, true);
+  } finally {
+    refreshing = false;
+    updateActionButtons();
+  }
+}
+
+async function loadRoutes() {
+  try {
+    currentRoutes = await api('/api/routes');
+    renderRoutes();
+  } catch (e) {
+    // 忽略
+  }
+}
+
+function ipToUint32(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) {
+    return null;
+  }
+  let val = 0;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) {
+      return null;
+    }
+    const n = Number(p);
+    if (n < 0 || n > 255) {
+      return null;
+    }
+    val = (val * 256) + n;
+  }
+  return val >>> 0;
+}
+
+function matchCIDR(ipStr, cidr) {
+  const ip = ipToUint32(ipStr);
+  if (ip === null) {
+    return false;
+  }
+  const [netStr, prefixStr] = cidr.split('/');
+  const net = ipToUint32(netStr);
+  if (net === null) {
+    return false;
+  }
+  const prefix = prefixStr === undefined ? 32 : Number(prefixStr);
+  if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) {
+    return false;
+  }
+  if (prefix === 0) {
+    return true;
+  }
+  const mask = (~0 << (32 - prefix)) >>> 0;
+  return (ip & mask) === (net & mask);
+}
+
+function matchDomain(host, suffix) {
+  const cleanHost = host.toLowerCase().replace(/^\.+|\.+$/g, '');
+  const cleanSuffix = suffix.toLowerCase().replace(/^\*\./, '').replace(/^\.+|\.+$/g, '');
+  if (!cleanHost || !cleanSuffix) {
+    return false;
+  }
+  return cleanHost === cleanSuffix || cleanHost.endsWith('.' + cleanSuffix);
+}
+
+function renderRoutes() {
+  const routes = currentRoutes.routes || [];
+  const domains = currentRoutes.domains || [];
+  $('tabRoutes').textContent = '网段 (' + routes.length + ')';
+  $('tabDomains').textContent = '域名 (' + domains.length + ')';
+  $('tabRoutes').className = routeTab === 'routes' ? 'sm tag-btn active' : 'sm tag-btn';
+  $('tabDomains').className = routeTab === 'domains' ? 'sm tag-btn active' : 'sm tag-btn';
+
+  if (!serverStatus || !serverStatus.state || !serverStatus.state.connected) {
+    $('routeSummary').textContent = '连接隧道后可查看下发规则';
+    $('routeMatchTip').style.display = 'none';
+    $('routeList').innerHTML = '';
+    return;
+  }
+  $('routeSummary').textContent = '共 ' + routes.length + ' 条网段 / ' + domains.length + ' 个域名后缀';
+
+  const q = $('routeFilter').value.trim();
+  const tip = $('routeMatchTip');
+  if (q) {
+    const hitRoute = routes.find((r) => matchCIDR(q, r));
+    const hitDomain = domains.find((d) => matchDomain(q, d));
+    tip.style.display = 'block';
+    if (hitRoute) {
+      tip.innerHTML = '<span class="badge ok">命中分流网段: ' + esc(hitRoute) + '</span>';
+    } else if (hitDomain) {
+      tip.innerHTML = '<span class="badge ok">命中分流域名: ' + esc(hitDomain) + '</span>';
+    } else {
+      tip.innerHTML = '<span class="badge">子串筛选模式（未精确命中 CIDR / 域名规则）</span>';
+    }
+  } else {
+    tip.style.display = 'none';
+  }
+
+  const items = routeTab === 'routes' ? routes : domains;
+  const shown = q
+    ? items.filter((item) => item.toLowerCase().includes(q.toLowerCase()) || (routeTab === 'routes' ? matchCIDR(q, item) : matchDomain(q, item)))
+    : items;
+
+  if (!shown.length) {
+    $('routeList').innerHTML = '<span class="faint">无匹配规则</span>';
+    return;
+  }
+  const limit = 120;
+  const truncated = shown.slice(0, limit);
+  $('routeList').innerHTML = truncated.map((item) => '<span class="route-item">' + esc(item) + '</span>').join('')
+    + (shown.length > limit ? '<span class="faint" style="padding:4px">... 还有 ' + (shown.length - limit) + ' 条</span>' : '');
+}
+
+async function refreshTotp() {
+  try {
+    const t = await api('/api/totp');
+    if (t.has_secret) {
+      currentTotp = t.code;
+      $('totpCode').textContent = t.code.slice(0, 3) + ' ' + t.code.slice(3);
+      $('totpTip').textContent = t.remaining + 's 后刷新';
+      $('totpTip').className = t.remaining <= 5 ? 'badge err' : 'badge ok';
+      $('btnCopyTotp').disabled = false;
+      $('totpBar').style.width = ((t.remaining / 30) * 100).toFixed(1) + '%';
+      $('totpBar').className = t.remaining <= 5 ? 'progress-fill urgent' : 'progress-fill';
+    } else {
+      currentTotp = '';
+      $('totpCode').textContent = '------';
+      $('totpTip').textContent = '未绑定';
+      $('totpTip').className = 'badge';
+      $('btnCopyTotp').disabled = true;
+      $('totpBar').style.width = '0%';
+    }
+  } catch (e) {
+    $('totpTip').textContent = '读取失败';
+  }
+}
+
+async function refreshLogs() {
+  try {
+    const list = await api('/api/logs');
+    if (!list || !list.length) {
+      $('logs').innerHTML = '<div class="faint" style="padding:8px 0">暂无运行日志</div>';
+      return;
+    }
+    $('logs').innerHTML = list.slice().reverse().map((e) => {
+      const lvl = e.level === 'error' ? 'error' : (e.level === 'warn' ? 'warn' : 'info');
+      return '<div class="log-row">'
+        + '<span class="log-time">' + esc(e.time) + '</span>'
+        + '<span class="log-lvl ' + lvl + '">' + esc(lvl) + '</span>'
+        + '<span class="log-msg">' + esc(e.message) + '</span>'
+        + '</div>';
+    }).join('');
+  } catch (e) {
+    // 忽略
+  }
+}
+
+async function clearLogs() {
+  try {
+    await api('/api/logs?action=clear', { method: 'DELETE' });
+    await refreshLogs();
+    showToast('日志已清空');
+  } catch (e) {
+    showToast('清空失败: ' + e.message, true);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const s = await api('/api/settings');
+    $('setCompany').value = s.company_name || '';
+    $('setServer').value = s.server || '';
+    $('setActivate').value = s.activate_code || '';
+    $('setProxy').value = s.proxy_listen || '';
+    $('setPanel').value = s.panel_listen || '';
+    $('setUser').value = s.socks5_username || '';
+    $('setPass').value = s.socks5_password || '';
+    $('setAutoInterval').value = s.auto_mode_interval_seconds !== undefined ? s.auto_mode_interval_seconds : 300;
+    $('setKeepalive').value = s.keepalive_seconds !== undefined ? s.keepalive_seconds : 1800;
+    $('setLog').value = s.log_level || 'info';
+    $('setModel').value = s.device_model || '';
+    $('setBrand').value = s.device_brand || '';
+    $('setOsVer').value = s.os_version || '';
+    $('setOsPatch').value = s.os_version_patch || '';
+  } catch (e) {
+    showToast('加载设置失败: ' + e.message, true);
+  }
+}
+
+async function saveSettings() {
+  $('btnSaveSettings').disabled = true;
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_name: $('setCompany').value.trim(),
+        server: $('setServer').value.trim(),
+        activate_code: $('setActivate').value.trim(),
+        proxy_listen: $('setProxy').value.trim(),
+        panel_listen: $('setPanel').value.trim(),
+        socks5_username: $('setUser').value.trim(),
+        socks5_password: $('setPass').value,
+        auto_mode_interval_seconds: parseInt($('setAutoInterval').value || '300', 10),
+        keepalive_seconds: parseInt($('setKeepalive').value || '1800', 10),
+        log_level: $('setLog').value,
+        device_model: $('setModel').value.trim(),
+        device_brand: $('setBrand').value.trim(),
+        os_version: $('setOsVer').value.trim(),
+        os_version_patch: $('setOsPatch').value.trim(),
+      }),
+    });
+    if (r.server !== undefined) {
+      $('setServer').value = r.server;
+    }
+    if (r.company_name !== undefined) {
+      $('setCompany').value = r.company_name;
+    }
+    const tip = r.restart_required && r.restart_required.length
+      ? '已保存，以下项需重启生效：' + r.restart_required.join('、')
+      : '已保存并立即生效';
+    $('settingsTip').textContent = tip;
+    showToast(tip);
+    await refreshStatus();
+    await loadLoginMethods();
+  } catch (e) {
+    $('settingsTip').textContent = e.message;
+    showToast('保存设置失败: ' + e.message, true);
+  } finally {
+    $('btnSaveSettings').disabled = false;
+  }
+}
+
+async function loadSub() {
+  try {
+    const r = await api('/api/sub');
+    $('subUrl').textContent = r.url;
+    $('btnImportClash').href = 'clash://install-config?url=' + encodeURIComponent(r.url);
+  } catch (e) {
+    // 忽略
+  }
+}
+
+function renderLoginMethods(methods) {
+  if (!methods || !methods.length) {
+    return;
+  }
+  const sel = $('loginMethod');
+  const prev = sel.value;
+  sel.innerHTML = methods.map((m) => {
+    const label = m.full_title || m.alias || m.alias_key;
+    return '<option value="' + esc(m.alias) + '">' + esc(label) + ' (' + esc(m.alias) + ')</option>';
+  }).join('');
+  if (prev && methods.some((m) => m.alias === prev)) {
+    sel.value = prev;
+  }
+}
+
+async function loadLoginMethods() {
+  try {
+    const r = await api('/api/login/methods');
+    renderLoginMethods(r.methods || []);
+  } catch (e) {
+    // 未配置服务端时不报错
+  }
+}
+
+async function startLogin() {
+  $('btnLogin').disabled = true;
+  try {
+    const alias = $('loginMethod').value;
+    const qs = alias ? ('?alias=' + encodeURIComponent(alias)) : '';
+    const r = await api('/api/login/start' + qs, { method: 'POST' });
+    if (r.methods) {
+      renderLoginMethods(r.methods);
+    }
+    if (r.alias) {
+      $('loginMethod').value = r.alias;
+    }
+    $('loginLink').href = r.url;
+    $('loginLinkRow').style.display = 'flex';
+    $('loginStep2').style.display = 'block';
+    $('loginTip').textContent = '已生成授权链接（' + (r.full_title || r.alias || 'SSO') + '），请打开授权并将回调地址粘贴回第 2 步。';
+    showToast('授权链接已生成');
+  } catch (e) {
+    $('loginTip').textContent = '获取授权链接失败: ' + e.message;
+    showToast('获取授权链接失败: ' + e.message, true);
+  } finally {
+    $('btnLogin').disabled = false;
+  }
+}
+
+async function submitCallback() {
+  const callback = $('callback').value.trim();
+  if (!callback) {
+    showToast('请先粘贴回调 URL', true);
+    return;
+  }
+  $('btnCallback').disabled = true;
+  try {
+    const r = await api('/api/login/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback }),
+    });
+    if (r.mfa_required) {
+      $('loginStep3').style.display = 'block';
+      $('mfaPrompt').textContent = r.has_totp
+        ? '第 3 步：已绑定本地 TOTP，可直接留空自动填码验证，或手动输入验证码：'
+        : '第 3 步：请输入二次验证码，或点击发送邮箱验证码：';
+      $('loginTip').textContent = '回调校验通过，需要完成二次验证';
+      await refreshStatus();
+      return;
+    }
+    $('loginTip').textContent = '登录成功，获取到 ' + (r.nodes || 0) + ' 个节点';
+    $('loginStep2').style.display = 'none';
+    $('loginLinkRow').style.display = 'none';
+    $('callback').value = '';
+    showToast('登录成功');
+    await loadNodes();
+    await refreshStatus();
+    await refreshTotp();
+  } catch (e) {
+    $('loginTip').textContent = e.message;
+    showToast('提交回调失败: ' + e.message, true);
+  } finally {
+    $('btnCallback').disabled = false;
+  }
+}
+
+async function sendMfaCode() {
+  $('btnSendMfa').disabled = true;
+  try {
+    await api('/api/login/mfa/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'email' }),
+    });
+    $('loginTip').textContent = '已发送邮箱验证码，请注意查收';
+    showToast('验证码已发送');
+    let left = 30;
+    const timer = setInterval(() => {
+      left--;
+      if (left <= 0) {
+        clearInterval(timer);
+        $('btnSendMfa').disabled = false;
+        $('btnSendMfa').textContent = '发送邮箱验证码';
+      } else {
+        $('btnSendMfa').textContent = '已发送 (' + left + 's)';
+      }
+    }, 1000);
+  } catch (e) {
+    $('btnSendMfa').disabled = false;
+    $('loginTip').textContent = e.message;
+    showToast('发送验证码失败: ' + e.message, true);
+  }
+}
+
+async function submitMfa() {
+  $('btnMfa').disabled = true;
+  try {
+    const r = await api('/api/login/mfa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: $('mfaCode').value.trim() }),
+    });
+    $('loginTip').textContent = '登录成功，获取到 ' + (r.nodes || 0) + ' 个节点';
+    $('loginStep2').style.display = 'none';
+    $('loginStep3').style.display = 'none';
+    $('loginLinkRow').style.display = 'none';
+    $('callback').value = '';
+    $('mfaCode').value = '';
+    showToast('登录成功');
+    await loadNodes();
+    await refreshStatus();
+    await refreshTotp();
+  } catch (e) {
+    $('loginTip').textContent = e.message;
+    showToast('二次验证失败: ' + e.message, true);
+  } finally {
+    $('btnMfa').disabled = false;
+  }
+}
+
+async function logout() {
+  try {
+    await api('/api/logout', { method: 'POST' });
+    $('loginTip').textContent = '已退出登录';
+    $('loginStep2').style.display = 'none';
+    $('loginStep3').style.display = 'none';
+    $('loginLinkRow').style.display = 'none';
+    showToast('已退出登录');
+    await loadNodes();
+    await refreshStatus();
+  } catch (e) {
+    showToast('退出登录失败: ' + e.message, true);
+  }
+}
+
+$('btnConnect').onclick = () => {
+  connectNode(userPicked);
+};
+$('btnDisconnect').onclick = disconnect;
+$('btnPingAll').onclick = pingAll;
+$('btnRefresh').onclick = refreshNodes;
+$('btnDismissErr').onclick = () => {
+  localErr = '';
+  $('errBanner').style.display = 'none';
+};
+
+$('nodeSelect').onchange = (e) => {
+  userPicked = e.target.value;
+  updateActionButtons();
+};
+$('nodeSearch').oninput = renderNodes;
+
+$('tabRoutes').onclick = () => {
+  routeTab = 'routes';
+  renderRoutes();
+};
+$('tabDomains').onclick = () => {
+  routeTab = 'domains';
+  renderRoutes();
+};
+$('routeFilter').oninput = renderRoutes;
+
+$('btnCopyProxy').onclick = () => {
+  copyText($('proxyAddr').textContent, '代理地址');
+};
+$('btnCopyEnv').onclick = () => {
+  const addr = $('proxyAddr').textContent;
+  copyText('export https_proxy=http://' + addr + ' http_proxy=http://' + addr + ' all_proxy=socks5://' + addr, '终端代理命令');
+};
+$('btnCopySub').onclick = () => {
+  copyText($('subUrl').textContent, 'Clash 订阅链接');
+};
+
+$('totpCode').onclick = () => {
+  if (currentTotp) {
+    copyText(currentTotp, '动态验证码');
+  }
+};
+$('btnCopyTotp').onclick = () => {
+  copyText(currentTotp, '动态验证码');
+};
+
+$('btnLogin').onclick = startLogin;
+$('btnCopyAuthUrl').onclick = () => {
+  copyText($('loginLink').href, '授权链接');
+};
+$('btnCallback').onclick = submitCallback;
+$('callback').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    submitCallback();
+  }
+};
+$('btnSendMfa').onclick = sendMfaCode;
+$('btnMfa').onclick = submitMfa;
+$('mfaCode').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    submitMfa();
+  }
+};
+$('btnLogout').onclick = logout;
+$('btnSaveSettings').onclick = saveSettings;
+$('btnClearLogs').onclick = clearLogs;
+$('easterTrigger').onclick = () => {
+  if (lifetimePact) {
+    showToast('「迷子でもいい、迷子でもプロキシ進め。」');
+    return;
+  }
+  $('easterChoices').classList.toggle('open');
+};
+$('btnEasterHeavy').onclick = () => {
+  $('easterChoices').classList.remove('open');
+  showToast('「自分のことばかりですね」');
+};
+$('btnEasterAccept').onclick = () => {
+  lifetimePact = true;
+  document.title = '一生プロキシしてくれる？';
+  $('easterTrigger').textContent = '✦ 一生、プロキシする ✦';
+  $('easterChoices').classList.remove('open');
+  showToast('「迷子でもいい、迷子でもプロキシ進め。」');
+  const connected = Boolean(serverStatus && serverStatus.state && serverStatus.state.connected);
+  if (!connected) {
+    connectNode(userPicked);
+  }
+};
+
+(async () => {
+  await Promise.all([
+    loadNodes(),
+    loadSettings(),
+    loadSub(),
+    loadLoginMethods(),
+    refreshStatus(),
+    refreshStats(),
+    refreshTotp(),
+    refreshLogs(),
+    refreshLatency(),
+  ]);
+})();
+
+setInterval(refreshStatus, 3000);
+setInterval(refreshStats, 2000);
+setInterval(refreshTotp, 1000);
+setInterval(refreshLogs, 4000);
+setInterval(refreshLatency, 30000);
+</script>
+</body>
+</html>

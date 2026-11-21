@@ -1,0 +1,194 @@
+# Corplink Go
+
+用 Go 重新实现飞连（CorpLink）客户端协议，提供一个本地混合代理、Web 控制面板与 macOS 原生桌面端。
+不需要安装官方客户端，也不需要 TUN/root：数据面跑在用户态 WireGuard + gVisor netstack 上。
+
+仓库分成三层，依赖单向：
+
+```
+apps/*     端侧（CLI / 桌面 / Android）—— 只调库，不复制业务逻辑
+httpapi    HTTP 契约（JSON API + 控制面板页面 + 令牌鉴权）—— 只依赖库
+corplink/  库：登录、签名、隧道、代理、订阅、TOTP —— 只依赖标准库与 wireguard-go
+```
+
+## 它能做什么
+
+- **登录与保活**：PKCE 第三方授权（SSO / 飞书）+ 二次验证（邮箱 / 短信 / 自动 TOTP），会话自动保存与保活
+- **协议与隧道**：按服务端规则对请求签名（HKDF + HMAC + protobuf 头），拉取节点并建立 WireGuard 隧道（支持 UDP 与 TCP 分帧）
+- **混合代理与认证**：本机单端口同时提供 SOCKS5 与 HTTP 代理，支持 RFC 1929 与 Basic 认证
+- **Web 控制面板**：连接/断开/自动选路/单节点与全量测速/节点搜索与标签筛选/分流规则校验/TOTP 倒计时与复制/实时流量速率与峰值/登录向导/运行日志/动态配置
+- **Clash 订阅**：生成防回环的 Clash 配置，分流规则由服务端下发并交给 Clash 执行
+- **桌面客户端**：MyGo 原生窗口（节点、流量、令牌、设置、日志）+ 菜单栏动态状态图标、节点直连切换与一键复制动态码
+
+## 快速开始
+
+```bash
+# 构建 CLI
+go build -o corplink ./apps/cli
+
+# 启动（代理 3710，面板 13140，默认数据目录 ~/.corplink-go）
+./corplink serve
+```
+
+也可以预先准备配置文件（如指定自定义路径 `-config ./data/config.json`）：
+
+```bash
+mkdir -p ./data
+cat > ./data/config.json <<'EOF'
+{
+  "company_name": "your-company",
+  "device_model": "M2007J17C",
+  "device_brand": "Redmi",
+  "os_version": "32",
+  "os_version_patch": "2023-07-05",
+  "app_version": "3.3.24",
+  "build_number": "2485",
+  "language": "zh"
+}
+EOF
+
+./corplink serve -config ./data/config.json
+```
+
+启动时会打印带令牌的面板地址 `http://127.0.0.1:13140/?token=…`；令牌默认随机生成，
+也可以用 `-panel-token` 固定。首次带 token 访问会写入 Cookie，之后直接开根路径也能用。
+令牌对浏览器、脚本与订阅链接都生效，命令行取值加 `-H 'X-Corplink-Token: <token>'`。
+
+打开面板：
+
+1. 若未配置企业服务端，可在「系统设置」填入企业代码（或服务端地址），保存后立即生效
+2. 在「账号登录」点击「获取授权链接」，在浏览器完成 SSO 授权并把回调地址粘回面板提交
+3. 若要求二次验证：已绑定 TOTP 时留空即可自动填码，也可点击发送邮箱验证码手动填写
+4. 在「节点列表」选择节点（或直接连接「自动选择」），连接成功后即可使用代理
+
+代理使用示例：
+
+```bash
+curl --socks5 127.0.0.1:3710 http://internal.example.com
+curl -x http://127.0.0.1:3710 http://internal.example.com
+```
+
+## Clash
+
+面板里的订阅地址：
+
+```
+http://127.0.0.1:13140/clash.yml?token=<面板令牌>
+```
+
+导入 Clash Verge 后保持「规则」模式即可。配置里包含控制面域名与节点公网 IP 的防回环直连规则，
+企业内网分流规则来自服务端 `/vpn/conn` 下发的网段与域名后缀，未命中走 `MATCH,DIRECT`。
+DNS 使用 fake-ip，内网域名不依赖本机 DNS。
+
+## 命令
+
+| 命令 | 说明 |
+| --- | --- |
+| `corplink login` | 命令行完成一次登录（面板登录之外的兜底方式） |
+| `corplink list` | 拉取可用节点列表 |
+| `corplink connect` | 打印指定节点的隧道参数，便于排障 |
+| `corplink serve` | 启动守护进程：混合代理 + Web 控制面板 |
+| `corplink probe` | 探测企业信息与登录配置 |
+
+## 配置与数据
+
+全部状态放在同一个数据目录里：
+
+```
+<data-dir>/（默认 ~/.corplink-go）
+├── config.json   非敏感配置、设备标识与运行选项
+└── session.json  Cookie 与登录态（0600，切勿提交）
+```
+
+TOTP secret 存在 `config.json` 的 `code` 字段（登录成功后自动写入）。
+Docker 下默认数据目录为 `/data`。
+
+## Docker
+
+```bash
+docker build -t corplink-go .
+docker run -d --name corp-link \
+  -p 3710:3710 -p 13140:13140 \
+  -v $PWD/data:/data \
+  corplink-go
+```
+
+或使用 `docker compose up -d`。
+
+## 桌面版
+
+```bash
+go build -o corplink-desktop ./apps/desktop
+./corplink-desktop
+```
+
+macOS 原生窗口（节点、流量、令牌、设置、日志）+ 菜单栏常驻托盘，内部运行同一套核心运行时，Web 控制面板照常可用。
+点击菜单栏图标可快速切换节点直连、查看并一键复制当前 TOTP 动态码、复制代理地址或订阅链接。
+
+## 开发
+
+```bash
+go test ./...     # sign / sub / totp 的单元测试
+go vet ./...
+```
+
+目录结构：
+
+```
+corplink/corplink.go     库门面：New / Start / Close / Status / Nodes / Connect / Login / TOTP
+corplink/settings.go     配置读写（Settings / UpdateSettings）
+corplink/agent           单隧道管理、测速、自动选路、看门狗、事件日志
+corplink/tunnel          wireguard-go 封装；Start 用 netstack，StartWith 用外部网卡
+corplink/proxy           SOCKS5 + HTTP 混合代理（含认证）
+corplink/api             飞连 HTTP 协议与签名钩子
+corplink/auth            PKCE / 2FA / OTP
+corplink/login           登录流程编排
+corplink/sign            v1 请求签名
+corplink/sub             Clash 订阅生成
+corplink/totp            TOTP 动态码
+corplink/wgkey           X25519 密钥
+corplink/config          配置与设备标识
+httpapi                  JSON API + 控制面板页面 + 令牌鉴权
+apps/cli                 CLI 与服务入口
+apps/desktop             MyGo 原生桌面端
+apps/android             Android 端（gomobile 门面 + VpnService + Compose）
+```
+
+库不含任何监听与序列化：`httpapi` 才提供 HTTP 契约，端侧按需启动。
+Android 端只启用库与 VpnService，不起代理与面板，构建方式见 [apps/android/README.md](apps/android/README.md)。
+
+## 作为库使用
+
+`corplink` 收参数、返回对象，不假设运行环境：
+
+```go
+// 纯内存：不读配置文件、不写任何文件、不开端口
+client, err := corplink.New(ctx, corplink.Options{
+	Config:  config.Default(),
+	Logger:  slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	TUNFD:   fd,        // Android：VpnService.establish() 的 fd；不传则用内置 netstack
+	Verbose: false,
+})
+if err == nil {
+	err = client.Start(ctx)   // 这里才解析企业服务端、起后台循环
+}
+defer client.Close(ctx)
+
+st, _ := client.TOTP()        // 状态、节点、动态码、订阅都是普通返回值
+```
+
+约定：
+
+| 能力 | 触发条件 |
+| --- | --- |
+| 联网 | `Start` 之后；`New` 只做装配，不发请求 |
+| 监听端口 | 传了 `Options.ProxyListen` 或配置里有 `socks5_listen`，否则不开代理 |
+| 落盘 | 只有先 `config.Load(path)` 或传 `Options.ConfigPath` 才会写；`config.Default()` 下 `Save` 是空操作 |
+| 隧道网卡 | `Options.TUN` / `Options.TUNFD`，或先 `Prepare` 拿参数、再用 `Establish(fd)` 接入 |
+| 日志 | 全部走 `Options.Logger`（含 wireguard 内部日志，默认只留错误） |
+
+## 注意
+
+- 本项目只做协议复刻，用于个人在自有设备上连接公司内网；请遵守所在公司的安全与合规要求。
+- `config.json` 里的 `device_id`、`code`（TOTP）以及 `session.json` 都属于凭据，不要提交到仓库。
+- 服务端策略变更可能导致协议失效，需要重新对齐客户端行为。

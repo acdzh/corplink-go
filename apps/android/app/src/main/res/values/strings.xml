@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Corplink Go</string>
+    <string name="notification_channel">隧道状态</string>
+    <string name="notification_title">Corplink Go 隧道运行中</string>
+</resources>
