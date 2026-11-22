@@ -6,8 +6,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"errors"
 	"io/fs"
@@ -23,19 +21,12 @@ const shutdownTimeout = 5 * time.Second
 //go:embed static/*
 var assets embed.FS
 
-// Server 是控制面板的 HTTP 层。
-//
-// 默认不鉴权（只监听本机时够用）；一旦通过 -panel-auth 配了用户名密码，
-// 所有请求都要先过 HTTP Basic Auth —— 面板能改配置、能断连接，
-// 监听 0.0.0.0 又没鉴权等于把隧道控制权交给整个局域网。
+// Server 是控制面板的 HTTP 层，不做任何鉴权。
 type Server struct {
 	// PanelAddr 是面板对外的监听地址，用于拼订阅链接。
 	PanelAddr string
 	// Static 覆盖内置静态资源；为空时用包内嵌的控制面板页面。
 	Static fs.FS
-	// User 与 Pass 非空时启用 Basic Auth。
-	User string
-	Pass string
 }
 
 // Handler 返回面板的 HTTP 处理器。
@@ -52,29 +43,7 @@ func (s *Server) Handler(c *corplink.Client) http.Handler {
 	if static != nil {
 		mux.Handle("/", http.FileServer(http.FS(static)))
 	}
-	if s.User != "" || s.Pass != "" {
-		return basicAuth(mux, s.User, s.Pass)
-	}
 	return mux
-}
-
-// basicAuth 给处理器加一层 HTTP Basic Auth。
-//
-// 用 subtle.ConstantTimeCompare 比较摘要，避免按响应时间逐字符猜密码。
-func basicAuth(next http.Handler, user, pass string) http.Handler {
-	want := sha256.Sum256([]byte(user + ":" + pass))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name, pwd, ok := r.BasicAuth()
-		if ok {
-			got := sha256.Sum256([]byte(name + ":" + pwd))
-			if subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-		w.Header().Set("WWW-Authenticate", `Basic realm="corplink"`)
-		http.Error(w, "需要认证", http.StatusUnauthorized)
-	})
 }
 
 // Serve 在 addr 上提供面板服务，ctx 结束后优雅关闭。
