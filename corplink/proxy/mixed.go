@@ -28,7 +28,9 @@ const (
 	handshakeTimeout = 20 * time.Second
 	// resolveTimeout 是隧道内域名解析的上限。解析不走 ctx 时一旦上游 DNS 抖动，
 	// 整个 SOCKS 握手会卡到客户端（Clash/mihomo 默认 5s）先超时。
-	resolveTimeout = 3 * time.Second
+	// 隧道内解析偶尔要 3~6 秒（一次页面要解析十几个主机），3 秒会把正常解析判死，
+	// 表现为"页面开了但资源全挂"。放到 8 秒，同时靠单飞去重压住并发解析。
+	resolveTimeout = 8 * time.Second
 	// resolveCacheTTL 是域名解析结果的缓存时间：连接级缓存能挡掉绝大部分重复解析。
 	resolveCacheTTL = 5 * time.Minute
 	// maxResolveCache 是缓存条目上限。
@@ -39,8 +41,16 @@ const (
 type Server struct {
 	agent *agent.Agent
 
-	mu    sync.Mutex
-	cache map[string]resolveEntry
+	mu       sync.Mutex
+	cache    map[string]resolveEntry
+	inflight map[string]*lookupCall
+}
+
+// lookupCall 是一次正在进行的解析，多个连接共享同一份结果（单飞）。
+type lookupCall struct {
+	done  chan struct{}
+	addrs []string
+	err   error
 }
 
 // resolveEntry 是一条解析缓存。
@@ -235,11 +245,10 @@ func (s *Server) resolve(tun tunLike, host string) (netip.Addr, error) {
 	if addr, ok := s.loadCached(host); ok {
 		return addr, nil
 	}
-	addrs, err := s.lookupWithTimeout(tun, host)
+	addrs, err := s.resolveShared(tun, host)
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	defer s.storeCached(host, addrs)
 	if len(addrs) == 0 {
 		return netip.Addr{}, fmt.Errorf("解析 %s 失败", host)
 	}
@@ -260,6 +269,41 @@ func (s *Server) resolve(tun tunLike, host string) (netip.Addr, error) {
 		return fallback, nil
 	}
 	return netip.Addr{}, fmt.Errorf("解析 %s 失败", host)
+}
+
+// resolveShared 让同一个域名的并发解析只打一次隧道 DNS。
+//
+// 浏览器打开一个页面会同时要十几个主机，逐个去隧道里解析既慢又容易把
+// netstack 的 DNS 打满，表现出来就是大量资源超时。
+func (s *Server) resolveShared(tun tunLike, host string) ([]string, error) {
+	s.mu.Lock()
+	if call, ok := s.inflight[host]; ok {
+		s.mu.Unlock()
+		select {
+		case <-call.done:
+			return call.addrs, call.err
+		case <-time.After(resolveTimeout):
+			return nil, fmt.Errorf("解析 %s 超时（等待同一域名的并发解析）", host)
+		}
+	}
+	if s.inflight == nil {
+		s.inflight = map[string]*lookupCall{}
+	}
+	call := &lookupCall{done: make(chan struct{})}
+	s.inflight[host] = call
+	s.mu.Unlock()
+
+	addrs, err := s.lookupWithTimeout(tun, host)
+
+	s.mu.Lock()
+	call.addrs, call.err = addrs, err
+	delete(s.inflight, host)
+	s.mu.Unlock()
+	close(call.done)
+	if err == nil {
+		s.storeCached(host, addrs)
+	}
+	return addrs, err
 }
 
 // loadCached 读解析缓存。

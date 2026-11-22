@@ -43,7 +43,74 @@ const (
 	latencyTimeout = 6 * time.Second
 	// pingTimeout 是请求节点 /vpn/ping 的超时。
 	pingTimeout = 1500 * time.Millisecond
+	// handshakePollInterval 是对齐官方的握手轮询间隔：
+	// VpnHandshakeOperate.performHandshake 每 500ms 查一次握手状态。
+	handshakePollInterval = 500 * time.Millisecond
+	// handshakeStaleAfter 是运行期判定"握手已失效"的阈值。
+	// WireGuard keepalive 是 10 秒，三次没有更新说明隧道已经死了；
+	// 官方对应的是 disConnDetect（断连探测），不是等到 90 秒。
+	handshakeStaleAfter = 30 * time.Second
 )
+
+// errHandshakeTimeout 表示隧道建好了但握手始终没有完成。
+//
+// 官方 VpnHandshakeOperate 把这种情况判成 HANDSHAKE_OPERTOR_TIMEOUT，
+// 随后换节点（changeLocation）而不是原地重连，这里保持一致。
+var errHandshakeTimeout = errors.New("握手超时")
+
+// handshakeBudget 返回该传输协议下等待握手的预算。
+//
+// 取值直接对齐官方 VpnHandshakeOperate.performHandshake：
+// protocolMode=1(TCP) 6 秒、0(UDP) 9 秒、其余 15 秒。
+func handshakeBudget(protocol int) time.Duration {
+	switch protocol {
+	case tunnel.ProtocolTCP:
+		return 6 * time.Second
+	case tunnel.ProtocolUDP:
+		return 9 * time.Second
+	}
+	return 15 * time.Second
+}
+
+// waitHandshake 等隧道完成一次握手，成功返回 nil。
+//
+// since 是本次建连的起始时刻：只有握手时间戳晚于它才算"这次连上了"，
+// 避免把上一次连接遗留的 last_handshake 当成新连接的握手成功。
+func waitHandshake(tn *tunnel.Tunnel, since time.Time, budget time.Duration) error {
+	return waitHandshakeWith(tn.Stats, since, budget)
+}
+
+// waitHandshakeWith 是 waitHandshake 的可测版本：握手状态读函数由调用方给。
+func waitHandshakeWith(stats func() (string, error), since time.Time, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	for {
+		if raw, err := stats(); err == nil {
+			if hs := handshakeAt(raw); !hs.IsZero() && !hs.Before(since.Add(-time.Second)) {
+				return nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("%w：%s 内未收到握手应答", errHandshakeTimeout, budget)
+		}
+		time.Sleep(handshakePollInterval)
+	}
+}
+
+// handshakeAt 从 WireGuard UAPI 状态里取最近一次握手时间。
+func handshakeAt(raw string) time.Time {
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key != "last_handshake_time_sec" {
+			continue
+		}
+		sec, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || sec <= 0 {
+			return time.Time{}
+		}
+		return time.Unix(sec, 0)
+	}
+	return time.Time{}
+}
 
 // RecoveryMode 是 DPoP 相关失败后的恢复动作。
 //
@@ -225,6 +292,12 @@ type Agent struct {
 	auto bool
 	// protoOverride 记录每个节点被迫切换到的传输协议（握手连续失败后设置）。
 	protoOverride map[string]int
+	// handshakeProbe 是握手校验的注入点：生产用 waitHandshake，
+	// 测试里换成直接返回 nil（假节点不会做真实 WireGuard 握手）。
+	handshakeProbe func(*tunnel.Tunnel, time.Time, time.Duration) error
+	// protoFlips 记录本轮建连里已经为某个节点翻过几次协议。
+	// 同一个节点最多翻一次：翻完还握手失败就换节点，避免 TCP/UDP 来回抖。
+	protoFlips map[string]int
 	// handshakeFails 记录每个节点连续握手超时次数。
 	handshakeFails map[string]int
 	// latencies 是最近一次测速结果，节点名 -> 毫秒（-1 表示失败）。
@@ -273,6 +346,7 @@ func New(_ context.Context, cfg *config.Config, client *api.Client, opts Options
 		verbose:        opts.Verbose,
 		latencies:      map[string]int64{},
 		protoOverride:  map[string]int{},
+		protoFlips:     map[string]int{},
 		handshakeFails: map[string]int{},
 	}
 	return a
@@ -508,6 +582,7 @@ func (a *Agent) connectNode(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	a.resetProtoFlips(candidates)
 	var lastErr error
 	for _, node := range candidates {
 		for attempt := 1; attempt <= connAttempts; attempt++ {
@@ -516,6 +591,16 @@ func (a *Agent) connectNode(ctx context.Context, name string) error {
 				return nil
 			}
 			lastErr = err
+			// 握手超时是"隧道建好但对端没应答"，重试同一协议没有意义：
+			// 官方 VpnHandshakeOperate 在这里先换协议、再换节点。
+			if errors.Is(err, errHandshakeTimeout) {
+				if proto, ok := a.forceFlipProtocol(nodeName(node)); ok {
+					a.addEvent("warn", "节点 %s 握手超时，切到传输协议 %d 重试", nodeName(node), proto)
+					continue
+				}
+				a.addEvent("warn", "节点 %s 握手超时，换下一个节点", nodeName(node))
+				break
+			}
 			if !retryableConnectErr(err) {
 				break
 			}
@@ -1445,6 +1530,56 @@ func (a *Agent) flipProtocol(name string) (int, bool) {
 	return a.protoOverride[name], true
 }
 
+// resetProtoFlips 在一轮建连开始时清掉协议翻转计数。
+func (a *Agent) resetProtoFlips(nodes []api.VpnInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, n := range nodes {
+		delete(a.protoFlips, nodeName(n))
+	}
+}
+
+// resetProtoFlip 清掉单个节点的协议翻转计数。
+func (a *Agent) resetProtoFlip(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.protoFlips, name)
+}
+
+// spareNode 返回一个备选节点（非专属、且不是 name 本身），供换节点重连用。
+func (a *Agent) spareNode(name string) (string, bool) {
+	for _, n := range a.Nodes() {
+		if n.Dedicated {
+			continue
+		}
+		if nodeName(n) != name {
+			return nodeName(n), true
+		}
+	}
+	return "", false
+}
+
+// forceFlipProtocol 在握手超时时立刻把节点切到另一种传输协议。
+//
+// 与 flipProtocol 的区别：那个要求"连续失败 N 次"，用于 watchdog 的慢性抖动；
+// 这里对应官方握手失败后的立即换协议重试，每轮建连里同一个节点只翻一次。
+func (a *Agent) forceFlipProtocol(name string) (int, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.protoFlips[name] >= 1 {
+		return 0, false
+	}
+	cur := a.protoOverride[name]
+	if cur == tunnel.ProtocolTCP {
+		a.protoOverride[name] = tunnel.ProtocolUDP
+	} else {
+		a.protoOverride[name] = tunnel.ProtocolTCP
+	}
+	a.protoFlips[name]++
+	a.handshakeFails[name] = 0
+	return a.protoOverride[name], true
+}
+
 // effectiveMTU 把服务端 MTU 收敛到本机出网网卡能承载的大小。
 //
 // 服务端常下发 1500，但 PPPoE/部分 4G 链路上限只有 1492/1400：
@@ -1739,6 +1874,17 @@ func (a *Agent) establish(_ context.Context, plan *Plan, dev tun.Device) error {
 		}
 		return err
 	}
+	// 建隧道成功不等于连上：必须等对端回一次握手。
+	// 官方在这里会等到 6/9/15 秒（按协议）才宣布连接成功，握手没完成就直接换节点；
+	// 不这么做的后果是"看起来已连接"，实际所有请求都灌进黑洞，直到 watchdog 才发现。
+	probe := a.handshakeProbe
+	if probe == nil {
+		probe = waitHandshake
+	}
+	if err := probe(tun, time.Now(), handshakeBudget(plan.cfg.Protocol)); err != nil {
+		tun.Close()
+		return fmt.Errorf("节点 %s %w", plan.target, err)
+	}
 	next := &active{
 		node:           plan.node,
 		tun:            tun,
@@ -1807,21 +1953,24 @@ func (a *Agent) Watchdog(ctx context.Context, interval time.Duration) {
 			if !st.Connected {
 				continue
 			}
-			// 握手超过 90 秒没更新视为链路失效（keepalive 是 10 秒）。
-			if st.LastHandshake > 0 && time.Now().Unix()-st.LastHandshake > 90 {
+			// 握手超过 handshakeStaleAfter（30 秒，keepalive 是 10 秒）没有更新就判链路失效。
+			//
+			// 官方对应的是 disConnDetect 断连探测，动作是 tryProtocolDetect（换协议）
+			// 或 changeLocation（换节点）；这里同样先翻协议，翻过就换节点。
+			if st.LastHandshake > 0 && time.Since(time.Unix(st.LastHandshake, 0)) > handshakeStaleAfter {
 				name := st.Node
-				// 连续握手超时先怀疑传输协议被墙：切一次协议再重连，
-				// 避免官方 tryProtocolDetect 负责的那类"UDP 封了永远连不上"。
-				if flipped, ok := a.flipProtocol(name); ok {
-					a.addEvent("warn", "链路 %s 连续握手超时，切换传输协议后重连（protocol=%d）", name, flipped)
+				a.resetProtoFlip(name)
+				if proto, ok := a.forceFlipProtocol(name); ok {
+					a.addEvent("warn", "链路 %s 超过 %s 无握手，切到传输协议 %d 重连", name, handshakeStaleAfter, proto)
 				} else {
-					a.addEvent("warn", "链路 %s 握手超时，准备重连", name)
-				}
-				if a.Auto() {
-					// 自动模式下重新选一次最快节点。
-					if best, ok := a.fastest(ctx); ok {
-						name = best
+					if a.Auto() {
+						if best, ok := a.fastest(ctx); ok && best != name {
+							name = best
+						}
+					} else if alt, ok := a.spareNode(name); ok {
+						name = alt
 					}
+					a.addEvent("warn", "链路 %s 超过 %s 无握手，换节点 %s 重连", st.Node, handshakeStaleAfter, name)
 				}
 				if err := a.connectNode(ctx, name); err != nil {
 					a.addEvent("error", "重连 %s 失败: %v", name, err)

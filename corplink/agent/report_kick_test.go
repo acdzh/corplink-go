@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
 
@@ -98,6 +99,8 @@ func newKickAgent(t *testing.T, srv *httptest.Server, opts Options) (*Agent, api
 	}
 	node := api.VpnInfo{Name: "node-a", IP: "127.0.0.1", APIPort: port, VPNPort: 51820}
 	a := New(context.Background(), cfg, main, opts)
+	// 假节点不会有真实 WireGuard 握手，这里跳过握手校验，只验证上层状态机。
+	a.handshakeProbe = func(*tunnel.Tunnel, time.Time, time.Duration) error { return nil }
 	a.mu.Lock()
 	a.nodes = []api.VpnInfo{node}
 	a.reportNode = node

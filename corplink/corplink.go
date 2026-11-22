@@ -45,7 +45,8 @@ const (
 	// startupTimeout 是启动阶段请求超时。
 	startupTimeout = 30 * time.Second
 	// watchdogInterval 是隧道健康检查间隔。
-	watchdogInterval = 30 * time.Second
+	// 对齐官方的判定节奏：握手 30 秒没更新就算失效，5 秒检查一次让发现延迟可控。
+	watchdogInterval = 5 * time.Second
 )
 
 // 类型别名：端侧直接使用库里的状态结构，不重复定义一份。
