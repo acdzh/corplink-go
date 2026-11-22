@@ -48,7 +48,7 @@ const (
 	handshakePollInterval = 500 * time.Millisecond
 	// probeTimeout 是隧道探活单次超时；probeFailLimit 是连续失败几次才处置。
 	probeTimeout   = 3 * time.Second
-	probeFailLimit = 2
+	probeFailLimit = 3
 )
 
 // errHandshakeTimeout 表示隧道建好了但握手始终没有完成。
@@ -1947,17 +1947,28 @@ func (a *Agent) probeTunnel() error {
 	if cur == nil {
 		return fmt.Errorf("未连接")
 	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := cur.tun.LookupHost("www.bytedance.net")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(probeTimeout):
+	// 用"能不能摸到隧道内 DNS 服务器"当探针：它只依赖隧道的收发能力，
+	// 不依赖 DNS 解析本身（解析慢正是之前要解决的问题，拿它当探针会自己骗自己）。
+	// 连上去是成功；被拒绝也说明包一来一回能通，同样算活；只有超时才是真断。
+	target := "10.8.8.18:53"
+	for _, d := range cur.dns {
+		if d != "" {
+			target = net.JoinHostPort(d, "53")
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	conn, err := cur.tun.DialContext(ctx, "tcp", target)
+	if err == nil {
+		_ = conn.Close()
+		return nil
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return fmt.Errorf("探活超时（%s）", probeTimeout)
 	}
+	return nil
 }
 
 // Watchdog 周期性检查隧道健康：探活失败就重连。
