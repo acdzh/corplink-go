@@ -3,59 +3,74 @@
 ## 拓扑
 
 ```
-手机 / 需要走公司的设备
-   │ ① DNS：corp 域名问路由器（同网段直连，不经过 141）
+设备（手机 / Mac）
+   │ ① DNS：corp 域名 → 路由器 dnsmasq（同网段直连，不经过 141）
    ▼
 路由器 10.0.0.1（ImmortalWrt，dnsmasq）
-   │ ② 只把 corp 域名转发给 141:5335，其它域名保持原样
+   │ ② 只把 corp 域名转发给 141:5335；其它域名保持原样
    ▼
-141 · mihomo（host 网络）
-   │ ③ DNS 分流：corp 域名 → 127.0.0.1:10053；其它 → DoH
-   │ ④ 流量分流：RULE-SET(corp) → CorpLink(SOCKS5 127.0.0.1:3710)，其它 → 机场节点
+141 · mihomo（host 网络，端口 7890 混合代理 / 5335 DNS / 9090 控制面）
+   │ ③ DNS：corp 域名 → 127.0.0.1:10053；其它 → DoH
+   │ ④ 路由：RULE-SET(corp) → CorpLink(SOCKS5 127.0.0.1:3710)；其它 → 机场节点
    ▼
-141 · corplink（容器 ghcr.io/acdzh/corplink-go）
-   │ ⑤ 本地 DNS 10053 → 隧道内 10.8.8.18
+141 · corplink 容器（ghcr.io/acdzh/corplink-go）
+   │ ⑤ 本地 DNS 127.0.0.1:10053 → 隧道内 10.8.8.18
    ▼
 公司内网
 ```
 
-关键点：**手机到路由器的 DNS 是同网段直连，永远不经过 141**，所以 DNS 这一步只能在路由器上做；
-141 上的 tproxy/redirect 规则对这类查询无效（已删除，避免误解）。
+**关键**：手机到路由器的 DNS 是同网段直连，不经过 141，所以 DNS 只能在路由器上做；
+141 上的 tproxy/redirect 规则对这类查询无效（已删）。
 
-## 唯一真源
+## 域名怎么加（没有脚本，直接改三处）
 
-`deploy/corp/corp-domains.txt` —— 只放公司内网域名。公网域名（google / x.com / anthropic …）不要加。
+公司域名很少，写死即可。加一个域名需要改：
 
-改域名只需两步：
+| # | 文件 | 改什么 | 生效方式 |
+|---|---|---|---|
+| 1 | 141:`/mnt/d/docker/stacks/mihomo/config/ruleset/corp.yaml` | `payload:` 下加 `- '+.example.com'` | 见下方重载 |
+| 2 | 141:`/mnt/d/docker/stacks/mihomo/config/config.yaml` | `nameserver-policy` 的 `corplink corp dns` 块里加 `+.example.com: *corplinkdns` | 见下方重载 |
+| 3 | 路由器`/etc/config/dhcp` | 加 `list server '/example.com/10.0.0.141#5335'` | `/etc/init.d/dnsmasq restart` |
+
+重载 mihomo：
 
 ```bash
-./deploy/corp/sync-141.sh      # 写 mihomo 的 ruleset/corp.yaml + nameserver-policy，并热重载
-./deploy/corp/sync-router.sh   # 写路由器 dnsmasq 的 server=/域名/10.0.0.141#5335，并重启 dnsmasq
+curl -s -X PUT 'http://127.0.0.1:9090/configs?force=true' \
+  -H 'Authorization: Bearer 123456' -H 'Content-Type: application/json' \
+  -d '{"path":"/root/.config/mihomo/config.yaml"}'
 ```
 
-两个脚本都幂等，重复执行不会产生重复条目；都会自动备份（141：`config.yaml.bak.*`，路由器：`/etc/config/dhcp.bak.*`）。
+当前 corp 域名清单见 `deploy/corp/corp-domains.txt`（只是清单，供对照，不参与任何自动化）。
 
-## 验证（三条）
+## 设备怎么接（两种，互不影响）
+
+| 设备 | 接法 | 说明 |
+|---|---|---|
+| 手机 / 平板 | 路由器 DNS 转发（已在用） | 设备侧零改动；流量由路由器原有 tproxy 规则送进 141 |
+| Mac / Windows | 系统代理 → `10.0.0.141:7890`（HTTP/HTTPS/SOCKS 同端口） | 已在本机设好：Wi-Fi 服务的 SOCKS + HTTP + HTTPS 全指向 141:7890 |
+
+iOS/Android 没法手动设网关，只能靠路由器的 DNS 转发/策略；Mac 用系统代理最省事，不依赖路由。
+
+## 验证
 
 ```bash
-# 1) 141 上：corp DNS 与代理
-ssh admin@10.0.0.141 'dig @127.0.0.1 -p 10053 code.byted.org +short'
-ssh admin@10.0.0.141 'curl -s -o /dev/null -w "%{http_code}\n" -x 127.0.0.1:7890 https://code.byted.org/'   # 期望 302
+# 141 上
+ssh admin@10.0.0.141 'dig @127.0.0.1 -p 10053 code.byted.org +short'   # 期望 10.8.7.149
+ssh admin@10.0.0.141 'dig @127.0.0.1 -p 5335  code.byted.org +short'   # 期望 198.18.0.x（fake-ip）
+ssh admin@10.0.0.141 'curl -s -o /dev/null -w "%{http_code}\n" -x 127.0.0.1:7890 https://code.byted.org/'   # 302
 
-# 2) 路由器上：corp 域名拿到 141 的回答（fake-ip 198.18.x.x）
-ssh root@10.0.0.1 'nslookup code.byted.org 127.0.0.1'
+# 路由器上
+ssh root@10.0.0.1 'nslookup code.byted.org 127.0.0.1'                   # 期望 198.18.0.x
 
-# 3) 141 上：mihomo 是否正确分流
-ssh admin@10.0.0.141 'docker logs --tail 50 mihomo 2>&1 | grep byted'
-# 期望：code.byted.org:443 match RuleSet(corp) using CorpLink
+# Mac 上（系统代理已开）
+curl -s -o /dev/null -w "%{http_code}\n" -x 10.0.0.141:7890 https://code.byted.org/   # 302
 ```
 
 ## 已知限制
 
-- 路由器到 141 的转发依赖 141 在线：141 挂了，corp 域名解析会失败（其它域名不受影响）。
-- mihomo 对 corp 域名返回 fake-ip（198.18.x.x），设备必须把流量交给 141 才能还原域名；不走代理的设备拿到 fake-ip 也连不上 corp（本来也连不上）。
-- **UDP 节点（CN-LF5 / CN-HL9）经常“握手超时”并被服务端 `report 1000` 终止**，141 建议固定用 TCP 节点（如 CN-LF-TCP）。
-- 路由器 dnsmasq 的改法只影响 DNS；流量是否进 141 由路由器原有 tproxy 规则决定。
+- mihomo 对 corp 域名返回 **fake-ip（198.18.x.x）**。所以：不是走 141 的设备，即使解析到 corp 域名也连不上（连 198.18.x.x 会直接超时）。这是“没有代理就别想访问内网”的正常表现。
+- 路由器 → 141 的 DNS 转发依赖 141 在线；141 挂了，corp 域名解析失败，其它域名不受影响。
+- **UDP 节点（CN-LF5 / CN-HL9）经常“握手超时”并被服务端 `report 1000` 终止**；141 固定用 TCP 节点（CN-LF-TCP）。
 
 ## 回滚
 
@@ -64,15 +79,15 @@ ssh admin@10.0.0.141 'docker logs --tail 50 mihomo 2>&1 | grep byted'
 ssh root@10.0.0.1 'cp /etc/config/dhcp.bak.<时间> /etc/config/dhcp && /etc/init.d/dnsmasq restart'
 # 141 mihomo
 ssh admin@10.0.0.141 'cd /mnt/d/docker/stacks/mihomo/config && cp config.yaml.bak.<时间> config.yaml'
-ssh admin@10.0.0.141 'curl -s -X PUT "http://127.0.0.1:9090/configs?force=true" -H "Authorization: Bearer 123456" -H "Content-Type: application/json" -d "{\"path\":\"/root/.config/mihomo/config.yaml\"}"'
+# Mac 系统代理
+sudo networksetup -setwebproxystate Wi-Fi off && sudo networksetup -setsecurewebproxystate Wi-Fi off && sudo networksetup -setsocksfirewallproxystate Wi-Fi off
 ```
 
-## 相关文件
+## 相关位置
 
 | 位置 | 内容 |
 |---|---|
-| `deploy/corp/corp-domains.txt` | corp 域名唯一真源 |
-| `deploy/corp/sync-141.sh` | 写 mihomo（ruleset + nameserver-policy）并重载 |
-| `deploy/corp/sync-router.sh` | 写路由器 dnsmasq 转发并重启 |
-| 141:`/mnt/d/docker/stacks/corplink/` | corplink 容器、compose、数据（config.json / session.json / dpop） |
+| 141:`/mnt/d/docker/stacks/corplink/` | 容器、compose、数据（config.json / session.json / dpop） |
 | 141:`/mnt/d/docker/stacks/mihomo/config/` | mihomo 配置、ruleset/corp.yaml |
+| 路由器`/etc/config/dhcp` | dnsmasq 的 corp 域名转发 |
+| `deploy/corp/corp-domains.txt` | corp 域名清单（对照用） |
