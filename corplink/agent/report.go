@@ -124,6 +124,11 @@ func (a *Agent) sendReport(typ string) {
 		a.addEvent("warn", "服务端终止了本端连接（report code=1000），保留登录态")
 		a.stopReportLoopOnly()
 		a.Disconnect()
+		// 服务端踢掉的只是这条隧道连接：断开立刻用上次保存的 sign_token/identities
+		// 续连同一个节点，续不上再退化为一次新建连接。
+		a.resumeKickedConnection()
 		return
 	}
+	// 上报成功说明这条连接是健康的，把连续续连计数清零。
+	a.markReportHealthy()
 }

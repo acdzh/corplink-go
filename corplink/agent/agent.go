@@ -83,6 +83,9 @@ const (
 	codeSessionInvalid = 3015
 	// handshakeFailLimit 是连续握手超时多少次后切换传输协议。
 	handshakeFailLimit = 2
+	// kickResumeLimit 是同一段"被服务端终止"链条里最多发起的续连次数。
+	// 服务端持续下发 report code=1000 时靠它兜底，避免形成无上限的重连。
+	kickResumeLimit = 2
 )
 
 // RecoveryFor 把服务端错误码映射成恢复动作。
@@ -211,6 +214,9 @@ type Agent struct {
 	reportIP     string
 	reportPubKey string
 	reportMode   string
+	// kickResumes 是当前这段"连续被服务端终止"链条里已发起的续连次数；
+	// 连接上报成功（链路健康）后清零。
+	kickResumes int
 	// credNode / signToken / identities 是最近一次连接的下发凭据（与节点绑定）。
 	credNode   string
 	signToken  string
@@ -579,13 +585,26 @@ func compareLatency(lat map[string]int64, a, b api.VpnInfo) bool {
 	return false
 }
 
-// connectOnce 是一个候选节点的一次完整尝试。
+// connectOnce 是一个候选节点的一次完整尝试（普通新建连接）。
 func (a *Agent) connectOnce(ctx context.Context, node api.VpnInfo) error {
+	return a.connectOnceWith(ctx, node, false)
+}
+
+// connectOnceWith 是带续连标记的一次完整尝试。
+//
+// reconnect 为真时把上次连接保存的 sign_token/identities 带回 /vpn/conn，
+// 让服务端把这条隧道接到既有连接上（续连）；为假时是普通的新建连接。
+// 其余步骤与 connectOnce 完全一致：申请隧道参数、建网卡、起隧道。
+func (a *Agent) connectOnceWith(ctx context.Context, node api.VpnInfo, reconnect bool) error {
 	target := nodeName(node)
-	a.addEvent("info", "正在连接节点 %s...", target)
+	if reconnect {
+		a.addEvent("info", "正在续连节点 %s...", target)
+	} else {
+		a.addEvent("info", "正在连接节点 %s...", target)
+	}
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	plan, err := a.prepareNode(connCtx, node, RouteFull, false)
+	plan, err := a.prepareNode(connCtx, node, RouteFull, reconnect)
 	if err != nil {
 		return err
 	}
@@ -636,6 +655,85 @@ func (a *Agent) Disconnect() {
 		old.tun.Close()
 		a.addEvent("info", "已断开节点 %s", nodeName(old.node))
 	}
+}
+
+// reportNodeName 返回最近一次连接的节点名。
+//
+// 断开（含被服务端终止）不会清掉上报用的连接信息，续连靠它定位"同一个节点"。
+func (a *Agent) reportNodeName() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.reportNode.IP == "" {
+		return ""
+	}
+	return nodeName(a.reportNode)
+}
+
+// resumeTarget 返回续连要用的节点，必须是上次连接的那个节点。
+//
+// 重连凭据与节点绑定，换节点续连会被服务端当成无效凭据，因此节点不在列表里
+// 时直接放弃（调用方只记事件，不做别的补偿）。
+func (a *Agent) resumeTarget() (api.VpnInfo, error) {
+	name := a.reportNodeName()
+	if name == "" {
+		return api.VpnInfo{}, fmt.Errorf("没有可续连的节点记录")
+	}
+	node, err := a.pick(name)
+	if err != nil {
+		return api.VpnInfo{}, fmt.Errorf("节点 %s 不在节点列表中", name)
+	}
+	return node, nil
+}
+
+// resumeKickedConnection 在服务端终止连接（report code=1000）后自动续连。
+//
+// 连续被终止时用 kickResumeLimit 兜底：超过上限就保持断开，等 Watchdog 或
+// 用户动作接手，避免服务端持续踢线时形成无上限的重连。
+func (a *Agent) resumeKickedConnection() {
+	a.mu.Lock()
+	a.kickResumes++
+	round := a.kickResumes
+	a.mu.Unlock()
+	if round > kickResumeLimit {
+		a.addEvent("warn", "连续续连 %d 次仍未稳定，停止自动续连", round-1)
+		return
+	}
+	a.resumeAfterKick()
+}
+
+// resumeAfterKick 用既有凭据续连同一个节点，失败后退化为一次新建连接。
+//
+// 续连与新建各只尝试一次：两次都失败就保持断开，登录态与重连凭据都不动，
+// 由后续的 Watchdog、自动选路或用户操作决定下一步。
+func (a *Agent) resumeAfterKick() {
+	node, err := a.resumeTarget()
+	if err != nil {
+		a.addEvent("warn", "放弃续连: %v", err)
+		return
+	}
+	a.addEvent("info", "服务端终止连接，尝试用既有凭据续连 %s", nodeName(node))
+	if err := a.connectOnceWith(context.Background(), node, true); err != nil {
+		a.addEvent("warn", "续连失败（%v），改为新建连接", err)
+		if err := a.connectOnceWith(context.Background(), node, false); err != nil {
+			a.addEvent("error", "新建连接也失败（%v），保持断开", err)
+			return
+		}
+		a.addEvent("info", "新建连接成功")
+		return
+	}
+	if !a.State().Connected {
+		// 续连刚建好又被终止：不在同一层里重复发起，交给 resumeKickedConnection 的计数兜底。
+		a.addEvent("warn", "续连后立刻再次被服务端终止，保持断开")
+		return
+	}
+	a.addEvent("info", "续连成功")
+}
+
+// markReportHealthy 在连接上报成功时清空连续续连计数。
+func (a *Agent) markReportHealthy() {
+	a.mu.Lock()
+	a.kickResumes = 0
+	a.mu.Unlock()
 }
 
 // Keepalive 定期调用一个轻量接口，维持服务端会话并检测是否被踢。
