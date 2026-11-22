@@ -24,6 +24,7 @@ func runServe(args []string) error {
 	panelAddr := fs.String("panel", "", "控制面板监听地址，默认取配置")
 	dnsAddr := fs.String("dns", "", "本地 DNS 监听地址（默认 127.0.0.1:10053，留空取配置）")
 	nodeName := fs.String("name", "", "启动时自动连接的节点名，默认取配置")
+	mtu := fs.Int("mtu", 0, "覆盖隧道 MTU（默认用服务端下发值，例如 1420）")
 	keepalive := fs.Duration("keepalive", 0, "会话保活间隔，默认取配置（缺省 30m）")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
@@ -53,6 +54,7 @@ func runServe(args []string) error {
 		ProxyListen: listenProxy,
 		DNSListen:   *dnsAddr,
 		AutoNode:    *nodeName,
+		MTU:         *mtu,
 		Keepalive:   *keepalive,
 		Verbose:     *verbose,
 	})

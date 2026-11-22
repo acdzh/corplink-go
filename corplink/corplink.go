@@ -100,6 +100,8 @@ type Options struct {
 	Keepalive time.Duration
 	// Verbose 打开请求级日志。
 	Verbose bool
+	// MTU 覆盖隧道 MTU；0 表示用服务端下发值。
+	MTU int
 }
 
 // Client 是一个装配好的客户端：登录、隧道、代理共用同一份配置与会话。
@@ -197,6 +199,7 @@ func New(ctx context.Context, opts Options) (*Client, error) {
 		DeviceLogger: newDeviceLogger(logger, opts.Verbose),
 		DPoP:         dpopStore,
 		Verbose:      opts.Verbose,
+		MTUOverride:  opts.MTU,
 		ReportDevice: func(ctx context.Context) error {
 			return reportDevice(ctx, apiClient, cfg)
 		},

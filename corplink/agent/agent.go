@@ -254,6 +254,8 @@ type Options struct {
 	ReportDevice func(ctx context.Context) error
 	// Verbose 打开节点侧请求日志（/vpn/conn、/vpn/report）。
 	Verbose bool
+	// MTUOverride 覆盖服务端下发的隧道 MTU；0 表示用服务端值（经物理网卡收敛）。
+	MTUOverride int
 }
 
 // Agent 管理唯一活动隧道。
@@ -271,6 +273,7 @@ type Agent struct {
 	onTunnelFn   func()
 	reportDevice func(ctx context.Context) error
 	verbose      bool
+	mtuOverride  int
 
 	mu sync.RWMutex
 	// onKicked 在会话被服务端终止时回调（清会话、停重连）。
@@ -347,6 +350,7 @@ func New(_ context.Context, cfg *config.Config, client *api.Client, opts Options
 		onTunnelFn:     opts.OnTunnelChange,
 		reportDevice:   opts.ReportDevice,
 		verbose:        opts.Verbose,
+		mtuOverride:    opts.MTUOverride,
 		latencies:      map[string]int64{},
 		protoOverride:  map[string]int{},
 		protoFlips:     map[string]int{},
@@ -1815,6 +1819,11 @@ func (a *Agent) prepareNode(ctx context.Context, node api.VpnInfo, mode RouteMod
 		protocolName = "TCP"
 	}
 	mtu := effectiveMTU(int(info.Setting.VpnMTU))
+	// 服务端发 1280，比 1420 多 ~11% 的包，而每包都要过一次用户态栈；
+	// 允许显式覆盖以便按链路能力调优，默认仍用服务端值。
+	if a.mtuOverride > 0 {
+		mtu = a.mtuOverride
+	}
 	// 两套路由都由服务端下发：全局用全量，分流只走内网网段。
 	// 任一为空时回落到另一套，避免服务端只下发一份时隧道没有路由。
 	// 路由来自四张表：v4/v6 × 全量/分流，外加 NAT 与内网 DNS 的 dnat 网段。
