@@ -882,6 +882,16 @@ func (a *Agent) Keepalive(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// Tunnel 返回当前隧道，供代理做后台刷新解析。
+func (a *Agent) Tunnel() (*tunnel.Tunnel, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.current == nil {
+		return nil, fmt.Errorf("未连接")
+	}
+	return a.current.tun, nil
+}
+
 // Stats 返回当前隧道的流量与握手状态。
 func (a *Agent) Stats() Stats {
 	a.mu.RLock()
@@ -1959,16 +1969,42 @@ func (a *Agent) probeTunnel() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	conn, err := cur.tun.DialContext(ctx, "tcp", target)
-	if err == nil {
-		_ = conn.Close()
+	// 用一次真实的 DNS 查询当探针：UDP 上一个来回就够，不用等 TCP 三次握手，
+	// 在 UDP 隧道上也不会因为丢一个 SYN 就误判成断线。
+	conn, err := cur.tun.DialContext(ctx, "udp", target)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return fmt.Errorf("探活超时（%s）", probeTimeout)
+		}
 		return nil
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return fmt.Errorf("探活超时（%s）", probeTimeout)
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
+	if _, err := conn.Write(dnsProbeQuery()); err != nil {
+		return fmt.Errorf("隧道内 DNS 写入失败: %w", err)
+	}
+	buf := make([]byte, 512)
+	if _, err := conn.Read(buf); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return fmt.Errorf("探活超时（%s，隧道内 DNS 无应答）", probeTimeout)
+		}
+		return fmt.Errorf("隧道内 DNS 无应答: %w", err)
 	}
 	return nil
+}
+
+// dnsProbeQuery 构造一条最小的 DNS 查询报文（查询 www.bytedance.net 的 A 记录）。
+//
+// 只关心"有没有回包"，所以 ID 固定、不校验内容。
+func dnsProbeQuery() []byte {
+	q := []byte{0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	for _, label := range strings.Split("www.bytedance.net", ".") {
+		q = append(q, byte(len(label)))
+		q = append(q, label...)
+	}
+	return append(q, 0x00, 0x00, 0x01, 0x00, 0x01)
 }
 
 // Watchdog 周期性检查隧道健康：探活失败就重连。

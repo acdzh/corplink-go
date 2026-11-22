@@ -46,6 +46,8 @@ type Server struct {
 	inflight map[string]*lookupCall
 	// dnsAddr 是本地 DNS 服务地址，空则退回隧道内解析。
 	dnsAddr string
+	// refreshing 记录正在后台刷新的域名，避免同一个域名并发刷新。
+	refreshing map[string]bool
 }
 
 // lookupCall 是一次正在进行的解析，多个连接共享同一份结果（单飞）。
@@ -337,15 +339,46 @@ func (s *Server) resolveShared(tun tunLike, host string) ([]string, error) {
 }
 
 // loadCached 读解析缓存。
+//
+// 过期条目不再直接删掉，而是先返回旧地址、后台异步刷新（stale-while-revalidate）：
+// 隧道内解析冷启动要 1~5 秒，直接删会让用户正好撞上这个冷启动。
 func (s *Server) loadCached(host string) (netip.Addr, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	entry, ok := s.cache[host]
-	if !ok || time.Now().After(entry.expires) {
-		delete(s.cache, host)
+	if !ok {
+		s.mu.Unlock()
 		return netip.Addr{}, false
 	}
+	expired := time.Now().After(entry.expires)
+	if expired && !s.refreshing[host] {
+		if s.refreshing == nil {
+			s.refreshing = map[string]bool{}
+		}
+		s.refreshing[host] = true
+		go s.refresh(host)
+	}
+	s.mu.Unlock()
+	// 过期也先用旧值：地址变了顶多连一次旧 IP，比让用户等解析快得多。
 	return entry.addr, true
+}
+
+// refresh 在后台刷新一条过期缓存。
+func (s *Server) refresh(host string) {
+	defer func() {
+		s.mu.Lock()
+		delete(s.refreshing, host)
+		s.mu.Unlock()
+	}()
+	if s.agent == nil {
+		return
+	}
+	tun, err := s.agent.Tunnel()
+	if err != nil {
+		return
+	}
+	if addrs, err := s.lookupHost(tun, host); err == nil {
+		s.storeCached(host, addrs)
+	}
 }
 
 // storeCached 写解析缓存。
