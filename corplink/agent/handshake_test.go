@@ -75,3 +75,24 @@ func TestWaitHandshakeIgnoresStaleHandshake(t *testing.T) {
 func itoa(v int64) string {
 	return strconv.FormatInt(v, 10)
 }
+
+// 协议翻转要以"当前实际协议"为基准：TCP↔UDP 交替，且同一轮只翻一次。
+func TestForceFlipProtocolRelativeToCurrent(t *testing.T) {
+	a := &Agent{}
+	a.mu.Lock()
+	a.protoOverride = map[string]int{}
+	a.protoFlips = map[string]int{}
+	a.handshakeFails = map[string]int{}
+	a.mu.Unlock()
+
+	if got, ok := a.forceFlipProtocol("node-a", tunnel.ProtocolTCP); !ok || got != tunnel.ProtocolUDP {
+		t.Fatalf("当前 TCP 应翻成 UDP，实际 %d ok=%v", got, ok)
+	}
+	if _, ok := a.forceFlipProtocol("node-a", tunnel.ProtocolUDP); ok {
+		t.Fatal("同一轮不应翻第二次")
+	}
+	a.resetProtoFlip("node-a")
+	if got, ok := a.forceFlipProtocol("node-a", tunnel.ProtocolUDP); !ok || got != tunnel.ProtocolTCP {
+		t.Fatalf("当前 UDP 应翻成 TCP，实际 %d ok=%v", got, ok)
+	}
+}

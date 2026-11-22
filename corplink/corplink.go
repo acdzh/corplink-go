@@ -324,6 +324,12 @@ func (c *Client) StartProxy(addr string) error {
 	c.proxyLn = ln
 	c.proxyAddr = ln.Addr().String()
 	server := proxy.New(c.agent)
+	// 解析优先问自己的本地 DNS（带缓存），避免每个连接都穿透隧道解析。
+	if host, _, err := net.SplitHostPort(c.dnsAddr); err == nil && host != "" && host != "0.0.0.0" && host != "::" {
+		server.SetDNSAddr(c.dnsAddr)
+	} else {
+		server.SetDNSAddr("127.0.0.1:10053")
+	}
 	// 隧道重连后内网地址可能变化，解析缓存必须跟着清。
 	c.agent.SetOnTunnelChange(func() {
 		server.ResetCache()

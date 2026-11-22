@@ -46,10 +46,9 @@ const (
 	// handshakePollInterval 是对齐官方的握手轮询间隔：
 	// VpnHandshakeOperate.performHandshake 每 500ms 查一次握手状态。
 	handshakePollInterval = 500 * time.Millisecond
-	// handshakeStaleAfter 是运行期判定"握手已失效"的阈值。
-	// WireGuard keepalive 是 10 秒，三次没有更新说明隧道已经死了；
-	// 官方对应的是 disConnDetect（断连探测），不是等到 90 秒。
-	handshakeStaleAfter = 30 * time.Second
+	// probeTimeout 是隧道探活单次超时；probeFailLimit 是连续失败几次才处置。
+	probeTimeout   = 3 * time.Second
+	probeFailLimit = 2
 )
 
 // errHandshakeTimeout 表示隧道建好了但握手始终没有完成。
@@ -187,6 +186,8 @@ type Stats struct {
 	LastHandshake int64 `json:"last_handshake"`
 	// UptimeSeconds 是连接持续秒数。
 	UptimeSeconds int64 `json:"uptime_seconds"`
+	// Protocol 是当前隧道的传输协议（TCP/UDP）。
+	Protocol string `json:"protocol"`
 }
 
 // State 是当前活动连接的状态快照。
@@ -292,6 +293,8 @@ type Agent struct {
 	auto bool
 	// protoOverride 记录每个节点被迫切换到的传输协议（握手连续失败后设置）。
 	protoOverride map[string]int
+	// probeFails 记录连续探活失败次数（Watchdog 用）。
+	probeFails int
 	// handshakeProbe 是握手校验的注入点：生产用 waitHandshake，
 	// 测试里换成直接返回 nil（假节点不会做真实 WireGuard 握手）。
 	handshakeProbe func(*tunnel.Tunnel, time.Time, time.Duration) error
@@ -594,7 +597,7 @@ func (a *Agent) connectNode(ctx context.Context, name string) error {
 			// 握手超时是"隧道建好但对端没应答"，重试同一协议没有意义：
 			// 官方 VpnHandshakeOperate 在这里先换协议、再换节点。
 			if errors.Is(err, errHandshakeTimeout) {
-				if proto, ok := a.forceFlipProtocol(nodeName(node)); ok {
+				if proto, ok := a.forceFlipProtocol(nodeName(node), a.protocolFor(node)); ok {
 					a.addEvent("warn", "节点 %s 握手超时，切到传输协议 %d 重试", nodeName(node), proto)
 					continue
 				}
@@ -892,6 +895,7 @@ func (a *Agent) Stats() Stats {
 		Node:          nodeName(cur.node),
 		Address:       cur.addr,
 		UptimeSeconds: int64(time.Since(cur.since).Seconds()),
+		Protocol:      cur.protocol,
 	}
 	raw, err := cur.tun.Stats()
 	if err != nil {
@@ -1563,13 +1567,12 @@ func (a *Agent) spareNode(name string) (string, bool) {
 //
 // 与 flipProtocol 的区别：那个要求"连续失败 N 次"，用于 watchdog 的慢性抖动；
 // 这里对应官方握手失败后的立即换协议重试，每轮建连里同一个节点只翻一次。
-func (a *Agent) forceFlipProtocol(name string) (int, bool) {
+func (a *Agent) forceFlipProtocol(name string, cur int) (int, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.protoFlips[name] >= 1 {
 		return 0, false
 	}
-	cur := a.protoOverride[name]
 	if cur == tunnel.ProtocolTCP {
 		a.protoOverride[name] = tunnel.ProtocolUDP
 	} else {
@@ -1934,13 +1937,36 @@ func nodeName(node api.VpnInfo) string {
 	return fmt.Sprintf("%s:%d", node.IP, node.VPNPort)
 }
 
-// Watchdog 周期性检查隧道健康：握手长时间没有更新就重连。
+// probeTunnel 在隧道内解析一个公司域名，用来判断链路是否真的通。
+//
+// 官方对应 disConnDetect：定时发探测，连续失败才动手，避免把一次抖动当断线。
+func (a *Agent) probeTunnel() error {
+	a.mu.RLock()
+	cur := a.current
+	a.mu.RUnlock()
+	if cur == nil {
+		return fmt.Errorf("未连接")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := cur.tun.LookupHost("www.bytedance.net")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(probeTimeout):
+		return fmt.Errorf("探活超时（%s）", probeTimeout)
+	}
+}
+
+// Watchdog 周期性检查隧道健康：探活失败就重连。
 //
 // 用于两种模式：自动模式下交给 AutoSelect 换节点，这里负责"同节点重建"，
 // 解决网关空闲切断后需要手动点连接的问题。
 func (a *Agent) Watchdog(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
-		interval = 30 * time.Second
+		interval = 5 * time.Second
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1951,30 +1977,43 @@ func (a *Agent) Watchdog(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			st := a.Stats()
 			if !st.Connected {
+				a.probeFails = 0
 				continue
 			}
-			// 握手超过 handshakeStaleAfter（30 秒，keepalive 是 10 秒）没有更新就判链路失效。
-			//
-			// 官方对应的是 disConnDetect 断连探测，动作是 tryProtocolDetect（换协议）
-			// 或 changeLocation（换节点）；这里同样先翻协议，翻过就换节点。
-			if st.LastHandshake > 0 && time.Since(time.Unix(st.LastHandshake, 0)) > handshakeStaleAfter {
-				name := st.Node
-				a.resetProtoFlip(name)
-				if proto, ok := a.forceFlipProtocol(name); ok {
-					a.addEvent("warn", "链路 %s 超过 %s 无握手，切到传输协议 %d 重连", name, handshakeStaleAfter, proto)
-				} else {
-					if a.Auto() {
-						if best, ok := a.fastest(ctx); ok && best != name {
-							name = best
-						}
-					} else if alt, ok := a.spareNode(name); ok {
-						name = alt
+			// 用"隧道内能不能真的解析出域名"探活，而不是看握手时间戳：
+			// WireGuard 只在 rekey（约 2 分钟）时更新 last_handshake，
+			// 用它判活会把健康链路误判成失效（官方也是发探测包，不是看握手）。
+			if err := a.probeTunnel(); err == nil {
+				a.probeFails = 0
+				continue
+			} else {
+				a.probeFails++
+				if a.probeFails < probeFailLimit {
+					a.addEvent("warn", "链路 %s 探活失败（%v），%d 次后处置", st.Node, err, probeFailLimit-a.probeFails)
+					continue
+				}
+			}
+			a.probeFails = 0
+			name := st.Node
+			a.resetProtoFlip(name)
+			cur := tunnel.ProtocolUDP
+			if st.Protocol == "TCP" {
+				cur = tunnel.ProtocolTCP
+			}
+			if proto, ok := a.forceFlipProtocol(name, cur); ok {
+				a.addEvent("warn", "链路 %s 连续探活失败，切到传输协议 %d 重连", name, proto)
+			} else {
+				if a.Auto() {
+					if best, ok := a.fastest(ctx); ok && best != name {
+						name = best
 					}
-					a.addEvent("warn", "链路 %s 超过 %s 无握手，换节点 %s 重连", st.Node, handshakeStaleAfter, name)
+				} else if alt, ok := a.spareNode(name); ok {
+					name = alt
 				}
-				if err := a.connectNode(ctx, name); err != nil {
-					a.addEvent("error", "重连 %s 失败: %v", name, err)
-				}
+				a.addEvent("warn", "链路 %s 连续探活失败，换节点 %s 重连", st.Node, name)
+			}
+			if err := a.connectNode(ctx, name); err != nil {
+				a.addEvent("error", "重连 %s 失败: %v", name, err)
 			}
 		}
 	}

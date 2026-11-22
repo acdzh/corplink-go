@@ -30,7 +30,7 @@ const (
 	// 整个 SOCKS 握手会卡到客户端（Clash/mihomo 默认 5s）先超时。
 	// 隧道内解析偶尔要 3~6 秒（一次页面要解析十几个主机），3 秒会把正常解析判死，
 	// 表现为"页面开了但资源全挂"。放到 8 秒，同时靠单飞去重压住并发解析。
-	resolveTimeout = 8 * time.Second
+	resolveTimeout = 4 * time.Second
 	// resolveCacheTTL 是域名解析结果的缓存时间：连接级缓存能挡掉绝大部分重复解析。
 	resolveCacheTTL = 5 * time.Minute
 	// maxResolveCache 是缓存条目上限。
@@ -44,6 +44,8 @@ type Server struct {
 	mu       sync.Mutex
 	cache    map[string]resolveEntry
 	inflight map[string]*lookupCall
+	// dnsAddr 是本地 DNS 服务地址，空则退回隧道内解析。
+	dnsAddr string
 }
 
 // lookupCall 是一次正在进行的解析，多个连接共享同一份结果（单飞）。
@@ -60,6 +62,8 @@ type resolveEntry struct {
 }
 
 // New 构造混合代理。
+// New 构造混合代理。解析优先走本地 DNS 服务（默认 127.0.0.1:10053，
+// corplink 自己的 DNS 有缓存），比每次重新穿透隧道解析快一个数量级。
 func New(a *agent.Agent) *Server {
 	return &Server{agent: a, cache: make(map[string]resolveEntry)}
 }
@@ -271,6 +275,32 @@ func (s *Server) resolve(tun tunLike, host string) (netip.Addr, error) {
 	return netip.Addr{}, fmt.Errorf("解析 %s 失败", host)
 }
 
+// SetDNSAddr 指定本地 DNS 服务地址（如 127.0.0.1:10053）。
+func (s *Server) SetDNSAddr(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsAddr = addr
+}
+
+// lookupHost 解析域名：优先问本地 DNS（有缓存），失败再退回隧道内解析。
+func (s *Server) lookupHost(tun tunLike, host string) ([]string, error) {
+	if s.dnsAddr != "" {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 2 * time.Second}
+				return d.DialContext(ctx, "udp", s.dnsAddr)
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+		defer cancel()
+		if addrs, err := resolver.LookupHost(ctx, host); err == nil && len(addrs) > 0 {
+			return addrs, nil
+		}
+	}
+	return s.lookupWithTimeout(tun, host)
+}
+
 // resolveShared 让同一个域名的并发解析只打一次隧道 DNS。
 //
 // 浏览器打开一个页面会同时要十几个主机，逐个去隧道里解析既慢又容易把
@@ -293,7 +323,7 @@ func (s *Server) resolveShared(tun tunLike, host string) ([]string, error) {
 	s.inflight[host] = call
 	s.mu.Unlock()
 
-	addrs, err := s.lookupWithTimeout(tun, host)
+	addrs, err := s.lookupHost(tun, host)
 
 	s.mu.Lock()
 	call.addrs, call.err = addrs, err
