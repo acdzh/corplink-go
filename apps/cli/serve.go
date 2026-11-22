@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/acdzh/corplink-go/corplink"
@@ -23,7 +24,8 @@ func runServe(args []string) error {
 	proxyAddr := fs.String("proxy", "", "混合代理监听地址（SOCKS5 + HTTP），默认取配置")
 	panelAddr := fs.String("panel", "", "控制面板监听地址，默认取配置")
 	dnsAddr := fs.String("dns", "", "本地 DNS 监听地址（默认 127.0.0.1:10053，留空取配置）")
-	nodeName := fs.String("name", "", "启动时自动连接的节点名，默认取配置")
+	nodeName := fs.String("name", "", "启动时自动连接的节点名，默认取配置 auto_node")
+	panelAuth := fs.String("panel-auth", "", "面板 Basic 认证，格式 用户名:密码；留空不鉴权")
 	keepalive := fs.Duration("keepalive", 0, "会话保活间隔，默认取配置（缺省 30m）")
 	verbose := fs.Bool("v", false, "打印请求与响应摘要")
 	if err := fs.Parse(args); err != nil {
@@ -71,6 +73,14 @@ func runServe(args []string) error {
 		listen = cfg.PanelListen
 	}
 	panel := &httpapi.Server{PanelAddr: listen}
+	if *panelAuth != "" {
+		user, pass, ok := strings.Cut(*panelAuth, ":")
+		if !ok || user == "" || pass == "" {
+			return fmt.Errorf("-panel-auth 需要 用户名:密码 格式")
+		}
+		panel.User, panel.Pass = user, pass
+		fmt.Printf("面板认证: 已启用（用户 %s）\n", user)
+	}
 	go func() {
 		if err := panel.Serve(ctx, listen, client); err != nil {
 			fmt.Fprintf(os.Stderr, "控制面板退出: %v\n", err)

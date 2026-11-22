@@ -264,13 +264,11 @@ func (c *Client) Start(ctx context.Context) error {
 
 	latencyInterval := time.Duration(c.cfg.AutoModeIntervalSeconds) * time.Second
 	c.agent.PollLatency(runCtx, latencyInterval)
-	// 只有显式指定节点时才在启动时连接：
-	// 多出口场景（比如一条隧道走 CN、一条走海外）需要第二个实例自动连线。
-	// 配置里的 mode 不触发连接，避免一开机就把代理建起来。
-	if c.opts.AutoNode != "" {
-		if err := c.agent.Connect(runCtx, c.opts.AutoNode); err != nil {
-			c.log.Warn("自动连接节点失败", "node", c.opts.AutoNode, "err", err)
-		}
+	// 启动自动连接：命令行 -name 优先，其次配置里的 auto_node。
+	// 断电/重启后没人点面板也要能自己连上，所以失败要一直退避重试，
+	// 而不是像以前那样只试一次、失败就永远停在未连接状态。
+	if node := firstNonEmpty(c.opts.AutoNode, c.cfg.AutoNode); node != "" {
+		go c.autoConnect(runCtx, node)
 	}
 	if c.cfg.Mode == "auto" {
 		c.agent.SetAuto(true)
@@ -309,6 +307,49 @@ func (c *Client) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// autoConnect 在启动阶段连接指定节点，失败按指数退避重试直到成功或退出。
+//
+// 边界：已经有连接（面板手动连过）就不再插手；登录态失效（被踢/未登录）
+// 时直接放弃，避免拿无效会话反复打服务端。
+func (c *Client) autoConnect(ctx context.Context, node string) {
+	const (
+		minBackoff = 3 * time.Second
+		maxBackoff = 2 * time.Minute
+	)
+	backoff := minBackoff
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if c.agent.State().Connected {
+			return
+		}
+		if !c.agent.LoggedIn() {
+			c.agent.LogEvent("warn", "自动连接跳过：当前未登录")
+			return
+		}
+		c.agent.LogEvent("info", "启动自动连接 %s...", node)
+		if err := c.agent.Connect(ctx, node); err == nil {
+			c.agent.LogEvent("info", "自动连接 %s 成功", node)
+			return
+		} else {
+			c.log.Warn("自动连接节点失败", "node", node, "err", err)
+			c.agent.LogEvent("warn", "自动连接 %s 失败（%v），%s 后重试", node, err, backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
 }
 
 // StartProxy 在 addr 上启动混合代理；已在运行时先关掉旧的。
